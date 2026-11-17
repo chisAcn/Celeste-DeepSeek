@@ -102,7 +102,10 @@ def test_deepseek_playtest(monkeypatch, tmp_path):
     request = captured["request"]
     assert request["model"] == "deepseek-chat"
     assert request["response_format"] == {"type": "json_object"}
-    assert '"mock-flat"' in request["messages"][1]["content"]
+    content = request["messages"][1]["content"]
+    assert '"mock-flat"' in content
+    assert "movement_reference" in json.loads(content)
+    assert "Dash: 240 px/s" in json.loads(content)["movement_reference"]
     event = json.loads(Path("logs/decisions.jsonl").read_text(encoding="utf-8"))
     assert event["result"]["executed_frames"] == 30
 
