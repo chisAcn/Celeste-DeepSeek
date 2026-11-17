@@ -6,6 +6,7 @@ import os
 import uuid
 from pathlib import Path
 
+from agent.agents import ExecutorAgent, StepContract
 from agent.client import BridgeClient
 from agent.codex_play import CodexPlanner, CodexPlayError
 from agent.knowledge import MOVEMENT_REFERENCE
@@ -72,21 +73,6 @@ def skill_hint(skill, state):
     return hint
 
 
-def stale_plan_reason(planned: GameState, current: GameState) -> str | None:
-    if current.room != planned.room:
-        return "room_changed"
-    before, after = planned.player, current.player
-    if before is None or after is None or after.dead:
-        return "player_unavailable"
-    if before.on_ground != after.on_ground:
-        return "ground_state_changed"
-    if before.dashes != after.dashes:
-        return "dash_count_changed"
-    if max(abs(before.x - after.x), abs(before.y - after.y)) > 4:
-        return "position_changed"
-    return None
-
-
 async def observe_for_plan(registry, settle, exit_room):
     previous = None
     deadline = asyncio.get_running_loop().time() + 3
@@ -121,6 +107,7 @@ async def run(client, mode, steps=20, action_prior=None, *, settle=False, exit_r
     history = []
     retries = 0
     registry = ToolRegistry(client)
+    executor = ExecutorAgent(client, registry)
     llm = None
     codex = None
     previous_action = None
@@ -273,26 +260,21 @@ async def run(client, mode, steps=20, action_prior=None, *, settle=False, exit_r
                 if codex:
                     raise CodexPlayError("Codex action plan exceeds the bridge limits.") from error
                 raise
+            # The planning state becomes the contract's precondition, so a stale
+            # plan is refused before any frame is sent rather than judged after.
+            contract = StepContract.for_plan(
+                plan.actions, expected_x=(plan.expected_x_min, plan.expected_x_max),
+                planned=state if mode in {"codex", "deepseek"} else None)
             observations = {}
             if mode in {"codex", "deepseek"}:
-                current = GameState.model_validate(await registry.invoke("observe_game"))
-                observations = {"planning_state": state.model_dump(),
-                                "pre_execution_state": current.model_dump()}
-                reason = stale_plan_reason(state, current)
-                if reason:
-                    record({"step": step, "state": "STALE_PLAN", "reason": reason,
-                            "plan": plan.model_dump(), **observations})
-                    previous_action = None
-                    if reached_exit(current):
-                        return "SUCCESS"
-                    continue
+                observations["planning_state"] = state.model_dump()
             if not await wait_playable(client):
                 record({"step": step, "state": "NOT_PLAYABLE", "plan": plan.model_dump(),
                         **observations})
                 previous_action = None
                 continue
             try:
-                result = await registry.invoke("execute_actions", **seq.model_dump())
+                report = await executor.run(seq, contract)
             except RuntimeError as error:
                 if not any(token in str(error) for token in ("not playable", "busy")):
                     raise
@@ -300,13 +282,27 @@ async def run(client, mode, steps=20, action_prior=None, *, settle=False, exit_r
                         "plan": plan.model_dump(), **observations})
                 previous_action = None
                 continue
-            after = GameState.model_validate(result["after"])
+            observations["report"] = report.model_dump()
+            if report.status == "REJECTED":
+                record({"step": step, "state": "STALE_PLAN", "reason": report.reason,
+                        "plan": plan.model_dump(), **observations})
+                previous_action = None
+                if reached_exit(report.start):
+                    return "SUCCESS"
+                continue
+            result = {"execution_id": seq.execution_id,
+                      "status": ("completed" if report.status in {"SUCCEEDED", "UNSATISFIED"}
+                                 else "interrupted"),
+                      "executed_frames": report.executed_frames,
+                      "before": report.start.model_dump(),
+                      "after": (report.end or report.start).model_dump()}
+            after = report.end or report.start
             if settle:
                 settled_state = await observe_for_plan(registry, True, exit_room)
                 observations["settled_state"] = settled_state.model_dump()
             previous_action = (action_key(plan.actions[-1].buttons)
                                if result["status"] == "completed"
-                               and result["executed_frames"] == sum(action.frames for action in plan.actions)
+                               and report.executed_frames == report.planned_frames
                                and after.room.name == state.room.name else None)
             if after.player is None:
                 if reached_exit(after) or (settled_state and reached_exit(settled_state)):
@@ -316,11 +312,15 @@ async def run(client, mode, steps=20, action_prior=None, *, settle=False, exit_r
                 if not settled_state or settled_state.player is None:
                     return "RETRY"
                 after = settled_state
-            verified = plan.expected_x_min <= after.player.x <= plan.expected_x_max
-            stalled = abs(after.player.x - state.player.x) + abs(after.player.y - state.player.y) < 0.1
-            retries = retries + 1 if after.player.dead or not verified or stalled else 0
+            # Re-judge on the settled state: with --settle the landing happens
+            # after the last input frame, and the immediate state is mid-air.
+            failure = executor.success_reason(contract, after)
+            verified = failure is None
+            retries = 0 if verified and report.status == "SUCCEEDED" else retries + 1
             event = {"step": step, "state": "VERIFY", "plan": plan.model_dump(),
-                     "result": result, "verified": verified, **observations}
+                     "result": result, "verified": verified,
+                     "report_status": report.status, "report_reason": report.reason,
+                     **observations}
             record(event)
             if reached_exit(after) or (settled_state and reached_exit(settled_state)):
                 return "SUCCESS"

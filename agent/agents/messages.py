@@ -1,0 +1,158 @@
+"""Messages exchanged between the planning and execution agents.
+
+The contract is deliberately narrow: a few conditions the executor can check
+against the live snapshot without guessing. "Is she on the ground, in this
+band, with a dash left" is decidable; "did the jump feel right" is not, and a
+wrong guess there costs a death rather than a re-plan.
+"""
+
+from typing import Literal
+
+from pydantic import Field, model_validator
+
+from agent.protocol import ActionSequence, FrameAction, GameState, Schema
+
+Band = tuple[float, float]
+
+
+def within(value: float, band: Band | None) -> bool:
+    return band is None or band[0] <= value <= band[1]
+
+
+class Precondition(Schema):
+    """What must hold before the first frame is sent.
+
+    A failed precondition costs nothing: the report comes back REJECTED and no
+    input reaches the game.
+    """
+
+    room: str | None = None
+    on_ground: bool | None = None
+    min_dashes: int | None = Field(default=None, ge=0)
+    x: Band | None = None
+    y: Band | None = None
+
+    @model_validator(mode="after")
+    def ordered(self):
+        for band in (self.x, self.y):
+            if band and band[0] > band[1]:
+                raise ValueError("band minimum exceeds maximum")
+        return self
+
+
+class Success(Schema):
+    """What must hold at the end for the step to count as landed."""
+
+    on_ground: bool | None = None
+    min_dashes: int | None = Field(default=None, ge=0)
+    x: Band | None = None
+    y: Band | None = None
+
+    @model_validator(mode="after")
+    def ordered(self):
+        for band in (self.x, self.y):
+            if band and band[0] > band[1]:
+                raise ValueError("band minimum exceeds maximum")
+        return self
+
+
+class Abort(Schema):
+    """When the executor stops a step that is still running.
+
+    These are hard limits, not tuning knobs: a plan that trips one of them is
+    already wrong, and burning the remaining frames into a spike only makes the
+    report less useful.
+
+    ``diverged_px`` is off by default. Death is observed within one poll, so a
+    runaway arc is already caught; aborting on a coarse model-predicted band
+    would cut good plans short. Set it when a contract really needs precision,
+    such as replaying a verified macro.
+    """
+
+    dead: bool = True
+    timeout_frames: int | None = Field(default=None, ge=1)
+    diverged_px: float | None = Field(default=None, gt=0)
+    stall_frames: int = Field(default=12, ge=2)
+
+
+class StepContract(Schema):
+    pre: Precondition = Field(default_factory=Precondition)
+    ok: Success = Field(default_factory=Success)
+    abort: Abort = Field(default_factory=Abort)
+
+    @classmethod
+    def for_plan(cls, actions: list[FrameAction], expected_x: Band | None = None,
+                 planned: GameState | None = None, slack: int = 30) -> "StepContract":
+        """Build a contract for a plan that does not carry one.
+
+        Every guard the single-loop version applied by hand is reproduced here:
+        the planning state becomes the precondition within 4px, the plan's
+        expected range becomes the success band, and the frame budget gets a
+        slack so only a stuck execution trips it.
+        """
+        pre = Precondition()
+        if planned is not None and planned.player is not None:
+            player = planned.player
+            pre = Precondition(room=planned.room.name, on_ground=player.on_ground,
+                               min_dashes=player.dashes,
+                               x=(player.x - 4, player.x + 4),
+                               y=(player.y - 4, player.y + 4))
+        ok = Success()
+        if expected_x is not None:
+            ok = Success(x=(float(expected_x[0]), float(expected_x[1])))
+        total = sum(action.frames for action in actions)
+        return cls(pre=pre, ok=ok, abort=Abort(timeout_frames=total + slack))
+
+
+class TraceRow(Schema):
+    frame: int
+    x: float
+    y: float
+    vx: float = 0
+    vy: float = 0
+    on_ground: bool = True
+    dashes: int = 1
+
+
+StepStatus = Literal[
+    "SUCCEEDED",     # every frame ran and the success band held
+    "UNSATISFIED",   # every frame ran, the game did something else
+    "REJECTED",      # precondition failed before any frame was sent
+    "ABORTED",       # the executor stopped it (stall, timeout, divergence)
+    "DIED",          # Madeline died
+    "INTERRUPTED",   # the bridge stopped for its own reasons (cutscene, pause)
+]
+
+
+class StepReport(Schema):
+    """What the executor tells the planner.
+
+    The distinction that matters is UNSATISFIED versus ABORTED: the first means
+    the plan was wrong about the world, the second means the world moved while
+    the plan was being carried out. They need different next plans.
+    """
+
+    status: StepStatus
+    reason: str | None = None
+    execution_id: str
+    planned_frames: int = 0
+    executed_frames: int = 0
+    at_frame: int | None = None
+    contract: StepContract = Field(default_factory=StepContract)
+    start: GameState = Field(default_factory=GameState)
+    end: GameState | None = None
+    trace: list[TraceRow] = Field(default_factory=list)
+
+    @property
+    def settled(self) -> bool:
+        return self.status == "SUCCEEDED"
+
+
+def first_action(sequence: ActionSequence, frame: int) -> list[str]:
+    """Buttons held at a given frame offset, or [] past the end."""
+    offset = 0
+    for action in sequence.actions:
+        offset += action.frames
+        if frame < offset:
+            return action.buttons
+    return []

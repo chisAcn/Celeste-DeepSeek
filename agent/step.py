@@ -115,7 +115,7 @@ async def main(args):
             print(f"  mover {args.stable} stable at x=",
                   await wait_stable(client, args.stable))
         if args.wait_lift is not None:
-            print(f"  lift settled (lift,speed)=", await wait_lift(client, args.wait_lift))
+            print("  lift settled (lift,speed)=", await wait_lift(client, args.wait_lift))
         if args.wait_mover_y_ge is not None:
             ordinal, target = args.wait_mover_y_ge.split(":")
             print(f"  mover {ordinal} y -> >= {target}: got",
