@@ -1,0 +1,65 @@
+{
+ "schema_version": 1,
+ "source": "data/routes/7.md -- transcribed from the live clear that ended in room 8 at (2719,-1704). Origin is 'live': each route ran once on this machine against the real game, not just against the mock.",
+ "routes": [
+  {
+   "name": "7-spawn-to-e2",
+   "room": "7",
+   "start": [2600.0, -1480.0],
+   "dashes": 1,
+   "actions": [
+    {"buttons": ["right", "jump"], "frames": 16},
+    {"buttons": ["right"], "frames": 24},
+    {"buttons": ["right", "jump"], "frames": 20}
+   ],
+   "end": [2697.0, -1512.0],
+   "hits": 1,
+   "misses": 0,
+   "streak": 0,
+   "origin": "live",
+   "note": "Starts on the spawn tile. The jump is mandatory: the block at 2632..2656 has its underside level with her feet and walking right stops dead at x 2628."
+  },
+  {
+   "name": "7-e2-to-e3",
+   "room": "7",
+   "start": [2697.0, -1512.0],
+   "dashes": 1,
+   "actions": [
+    {"buttons": ["right"], "frames": 6},
+    {"buttons": ["right", "jump"], "frames": 20},
+    {"buttons": ["up", "dash"], "frames": 10},
+    {"buttons": ["left", "jump"], "frames": 10},
+    {"buttons": ["left"], "frames": 4},
+    {"buttons": ["left", "jump"], "frames": 8}
+   ],
+   "end": [2738.0, -1592.0],
+   "hits": 1,
+   "misses": 0,
+   "streak": 0,
+   "origin": "live",
+   "note": "Jump 27px, dash 69px, then a wall bounce that peaks at -1601 and the left:4 brake that keeps it from overshooting to x 2764. Without the brake, ten earlier variants fell out of the room."
+  },
+  {
+   "name": "7-e3-to-room-8",
+   "room": "7",
+   "start": [2738.0, -1592.0],
+   "dashes": 1,
+   "actions": [
+    {"buttons": ["left"], "frames": 6},
+    {"buttons": ["jump"], "frames": 20},
+    {"buttons": ["right"], "frames": 6},
+    {"buttons": ["right", "jump"], "frames": 8},
+    {"buttons": ["left"], "frames": 6},
+    {"buttons": ["left", "jump"], "frames": 10},
+    {"buttons": ["right"], "frames": 12},
+    {"buttons": ["right", "jump"], "frames": 10}
+   ],
+   "end": [2719.0, -1704.0],
+   "hits": 1,
+   "misses": 0,
+   "streak": 0,
+   "origin": "live",
+   "note": "Four alternating wall jumps in the 24px shaft at x 2712..2736. The 12-frame crossings are travel time between walls, not padding. Ends in room 8, which is why the landing is outside room 7's bounds."
+  }
+ ]
+}

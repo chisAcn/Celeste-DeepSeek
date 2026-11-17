@@ -12,6 +12,10 @@ replay before they were recorded. Routes promoted in-session have landed once,
 which is weaker evidence, so a route that misses twice in a row leaves rotation
 instead of being replayed a third time.
 
+The book outlives the process (see ``agent.agents.routes``): a route that cost a
+model call and a landed step is worth more than the session it was learned in,
+and a room cleared once should not need the model again.
+
 Matching is deliberately tight. A route is a promise about physics, and 2px is
 already generous for a grounded body; a wider tolerance would replay an arc
 that no longer fits the ledge it was recorded on.
@@ -76,6 +80,48 @@ class Replay:
             row["end"] = [round(self.end_x, 1),
                           None if self.end_y is None else round(self.end_y, 1)]
         return row
+
+    def to_dict(self) -> dict:
+        """The row as stored: positions rounded to the precision matching uses."""
+        row = {
+            "name": self.name,
+            "room": self.room,
+            "start": [round(self.x, 1), round(self.y, 1)],
+            "dashes": self.dashes,
+            "actions": [action.model_dump() for action in self.actions],
+            "hits": self.hits,
+            "misses": self.misses,
+            "streak": self.streak,
+            "origin": self.origin,
+        }
+        if self.end_x is not None:
+            row["end"] = [round(self.end_x, 1),
+                          None if self.end_y is None else round(self.end_y, 1)]
+        return row
+
+    @classmethod
+    def from_dict(cls, row: dict) -> "Replay":
+        """Rebuild a route from disk; a truncated or edited row must fail loudly.
+
+        The caller decides whether one bad row is worth losing the book over,
+        but nothing here guesses: positions, buttons and frame counts are all
+        validated, so a route that loads is a route that can be sent.
+        """
+        start = row["start"]
+        if len(start) != 2:
+            raise ValueError("route start needs two coordinates")
+        actions = [FrameAction.model_validate(action) for action in row["actions"]]
+        if not actions:
+            raise ValueError("route has no actions")
+        end = row.get("end") or []
+        return cls(name=str(row["name"]), room=str(row["room"]),
+                   x=float(start[0]), y=float(start[1]),
+                   dashes=int(row.get("dashes", 0)), actions=actions,
+                   end_x=float(end[0]) if end else None,
+                   end_y=None if len(end) < 2 or end[1] is None else float(end[1]),
+                   hits=int(row.get("hits", 0)), misses=int(row.get("misses", 0)),
+                   streak=int(row.get("streak", 0)),
+                   origin=str(row.get("origin", "disk")))
 
     @classmethod
     def from_skill(cls, skill) -> "Replay | None":
@@ -163,13 +209,21 @@ class SkillBook:
         settled = outcome.settled or report.end
         if settled is None or settled.player is None or not settled.player.on_ground:
             return None
-        promoted = self.add(Replay(name=f"learned-{len(self.entries) + 1}",
+        promoted = self.add(Replay(name=self._free_name("learned"),
                                    room=start.room.name,
                                    x=start.player.x, y=start.player.y,
                                    dashes=start.player.dashes,
                                    actions=actions,
                                    end_x=settled.player.x, end_y=settled.player.y))
         return None if promoted is None else promoted.name
+
+    def _free_name(self, prefix: str) -> str:
+        """A name no other route carries, so a report can name one route."""
+        taken = {entry.name for entry in self.entries}
+        index = len(self.entries) + 1
+        while f"{prefix}-{index}" in taken:
+            index += 1
+        return f"{prefix}-{index}"
 
     def describe(self, room: str, limit: int = 6) -> list[dict]:
         rows = [entry for entry in self.entries

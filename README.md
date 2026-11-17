@@ -32,7 +32,8 @@
 | 已通关房间 | 6b（→6c）、6c（→7）、7（→8），路线已固化为可复现宏 |
 | LLM 闭环 | 已验证「规划→校验→执行→观测」单步与三步闭环（Codex 模式，落点均命中预测区间） |
 | 双 Agent 协同 | `--collab` 实机验证：4 步零暂停、`rejected=0`；不稳定世界两条分支均按预期收敛 |
-| 测试 | `81 passed`，ruff clean |
+| 路线书 | `logs/routes.json` 跨会话存活；房间 7 三段宏随仓库带一份 `agent/agents/seed-routes.json`；实测从磁盘读回后重放 `latency 0.0`，模型零调用 |
+| 测试 | `95 passed`，ruff clean |
 | 未完成 | LLM 尚未自主通关整章；6b/6c/7 的路线是人机协作推出的宏，不是模型自己想的 |
 
 **6b 通关**：房间 `Celeste/1-ForsakenCity`，终点 `6c` (2332,-1304)
@@ -264,6 +265,20 @@ model calls 1  replays 2  routes 1
 
 路线有两个来源。`--skills` 从技能库读进来的是**回放验证过**的（`verified_start`/`verified_end` + 成功次数），可以直接重放；本局内新学的是「落地过一次」，证据更弱，所以**连续失手两次就退出轮换**，不会第三次还硬放。命中与失手都记在 `SkillBook` 里，`--no-replay` 可以整体关掉、退回纯模型规划。
 
+书现在**跨进程存活**：一个房间清过一次，模型就不该再被问第二次。会话结束时 `SkillBook` 原子落盘到 `logs/routes.json`（临时文件 + 替换，跑到一半被杀不会把书截断），下次启动直接读回来——起点、按键、落点，连同命中/失手次数。
+
+```
+step1  LANDED  replay verify-live  latency 0.0  settled [2719.0, -1704.0]
+session {"anchors": 1, "steps": 1, "landed": 1, "planner_replays": 1,
+         "routes": 1, "routes_book": "learned", "routes_dropped": 0}
+```
+
+这是从磁盘读回来的路线被重放：`latency 0.0` 说明模型没被调用，落点与记录一致，落盘后该条 `hits` 由 1 变 2——结账时最后一步的结局也被收了进去。
+
+随仓库带一份 `agent/agents/seed-routes.json`：房间 7 的三段宏，坐标抄自 `data/routes/7.md` 的实机通关记录（起点 `(2600,-1480)` 上 spawn，经 `e2 (2697,-1512)`、`e3 (2738,-1592)` 出到房间 8）。它只在 `logs/routes.json` 还不存在时作为起点读入，**不是第二本书**：一旦本机保存过，就以本机的书为准——合并会把已经降级的路线重新复活。`--route-book PATH` 换路径，`--no-route-book` 退回纯内存、不落盘。
+
+读不动的行只损失那一条路线，不会让整本书报废：解析失败的行计数后跳过（`routes_dropped`），已经降级的路线（`streak` 到上限）加载时也不回轮换。
+
 重放的计划仍然走完整契约：前置钉在锚点上，成功带是「上次落点 ±6px」，超时是「本条动作帧数 + slack」。落点偏出带就是 `MISSED`——不是要藏起来的事故，而是降级该路线的依据。
 
 配套的还有结局回执的加厚：`StepReport` 现在自带 `actions`，规划器拿到的不再只是「成了/没成」，而是 `status`（`ABORTED` 还是 `UNSATISFIED`）、`reason`（`timeout`/`stalled`/`x_out_of_band`）、`at_frame`（第几帧断的）、以及一条抽稀到 6 个点的轨迹。这三者指向完全不同的下一个计划：`ABORTED` 是世界在计划执行期间变了，`UNSATISFIED` 是计划本身判断错了。
@@ -329,6 +344,7 @@ PICO-8 版 Celeste Classic 用独立的输入格式，单独训练：`python -m 
 - `docs/protocols.md` — 协议 1.0、方法表、错误码、信息层 schema
 - `docs/acceptance.md` — 逐项验收清单与实机记录
 - `docs/phase4-7-status.md` — 各阶段实现到哪、哪些只是脚手架
-- `data/routes/6b.md`、`data/routes/6c.md` — 通关路线的完整推导
+- `data/routes/6b.md`、`data/routes/6c.md`、`data/routes/7.md` — 通关路线的完整推导
+- `agent/agents/seed-routes.json` — 房间 7 三段宏的机器可读版本（路线书的起点，见「路线重放」）
 
 源码：https://github.com/chisAcn/Celeste-Deepseek

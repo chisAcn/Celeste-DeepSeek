@@ -7,6 +7,8 @@ from pathlib import Path
 
 from agent.agents import ExecutorAgent, PlannerAgent, StepContract, TeamSession
 from agent.agents.planner import skill_hint
+from agent.agents.routes import LEARNED, open_book, save_book
+from agent.agents.skills import SkillBook
 from agent.client import BridgeClient
 from agent.codex_play import CodexPlanner, CodexPlayError
 from agent.knowledge import MOVEMENT_REFERENCE
@@ -321,7 +323,7 @@ async def run(client, mode, steps=20, action_prior=None, *, settle=False, exit_r
 async def run_collab(client, mode, *, steps=12, skills=None, exit_room=None,
                      success_room=None, action_prior=None, think_timeout=60.0,
                      anchor_timeout=8.0, unstable="wait", max_retries=3,
-                     replay=True):
+                     replay=True, route_book=None):
     """Plan in a separate task while the executor stands by.
 
     The two agents share only queues, so the model call can take as long as it
@@ -340,6 +342,8 @@ async def run_collab(client, mode, *, steps=12, skills=None, exit_room=None,
                 "The bridge lacks pause_control; rebuild and reinstall the mod.")
     llm = open_llm(mode)
     codex = CodexPlanner(Plan) if mode == "codex" else None
+    book, origin, dropped = (open_book(route_book) if route_book
+                             else (SkillBook(), "none", 0))
     try:
         if codex:
             await codex.check_login()
@@ -355,7 +359,7 @@ async def run_collab(client, mode, *, steps=12, skills=None, exit_room=None,
 
         planner = PlannerAgent(plan_fn, skills=skills, exit_room=exit_room,
                                success_room=success_room, action_prior=action_prior,
-                               timeout=think_timeout, replay=replay)
+                               timeout=think_timeout, replay=replay, book=book)
         session = TeamSession(
             ExecutorAgent(client, ToolRegistry(client)), planner,
             exit_room=exit_room, success_room=success_room, max_steps=steps,
@@ -368,9 +372,22 @@ async def run_collab(client, mode, *, steps=12, skills=None, exit_room=None,
                 await client.call("stop")
             except (OSError, RuntimeError, TimeoutError):
                 pass
+            # After the last outcome is drained, so the final landed step is
+            # in the file too. A session that crashed still leaves the routes
+            # it proved, because the write is atomic and happens either way.
+            # A failed write is reported, not raised: the verdict of the run
+            # matters more than the book it would have left behind.
+            if route_book:
+                try:
+                    save_book(planner.book, route_book)
+                except OSError as error:
+                    print(f"route book not written: {error}")
+
         stats = session.stats.summary()
         stats["planner_replays"] = planner.replays
         stats["routes"] = len(planner.book)
+        stats["routes_book"] = origin
+        stats["routes_dropped"] = dropped
         print("session " + json.dumps(stats, ensure_ascii=False))
         return verdict
     finally:
@@ -405,6 +422,12 @@ async def main():
                         help="consecutive steps without a landing before giving up (--collab)")
     parser.add_argument("--no-replay", action="store_true",
                         help="never replay a route that starts on the anchor; always ask the model")
+    parser.add_argument("--route-book", type=Path, default=LEARNED,
+                        help="where learned routes are read and written (--collab); "
+                             "defaults to logs/routes.json, seeded from "
+                             "agent/agents/seed-routes.json when it does not exist yet")
+    parser.add_argument("--no-route-book", action="store_true",
+                        help="keep learned routes in memory only; nothing is written to disk")
     args = parser.parse_args()
     if (args.settle or args.exit_room) and args.mode not in {"codex", "deepseek"}:
         parser.error("--settle and --exit-room require --mode codex or --mode deepseek")
@@ -416,6 +439,8 @@ async def main():
         parser.error("--collab replaces --pause-planning; use --on-unstable freeze instead")
     if args.no_replay and not args.collab:
         parser.error("--no-replay only applies to --collab")
+    if (args.no_route_book or args.route_book != LEARNED) and not args.collab:
+        parser.error("--route-book and --no-route-book only apply to --collab")
     if args.collab and args.settle:
         parser.error("--collab always waits for a still landing; drop --settle")
     if args.success_room and not args.exit_room:
@@ -452,7 +477,8 @@ async def main():
                     exit_room=args.exit_room, success_room=args.success_room,
                     skills=skills, think_timeout=args.think_timeout,
                     anchor_timeout=args.anchor_timeout, unstable=args.on_unstable,
-                    max_retries=args.max_retries, replay=not args.no_replay))
+                    max_retries=args.max_retries, replay=not args.no_replay,
+                    route_book=None if args.no_route_book else args.route_book))
             else:
                 steps = args.steps or (3 if args.mode in {"codex", "deepseek"} else 20)
                 print(await run(client, args.mode, steps=steps, action_prior=action_prior,
