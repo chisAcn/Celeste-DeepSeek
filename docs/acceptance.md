@@ -91,9 +91,55 @@ bridge observed the player alive and grounded in 6c at (2340, -1304),
 frame 460264. This verifies the recorded TAS route through 6b. The Codex
 planner's own full-room trial remains separate.
 
-The two-agent collaboration path (`--collab`) has not been run against a live
-game yet. Its promise is checkable from the decision log without watching the
-screen:
+The execution contract and the collaboration path were both run against bridge
+0.3.2 in room 7 on 2026-11-17, from a standing start at (2600, -1480).
+
+Execution contract:
+
+- A contract whose `pre.x` was 100px away from the player returned `REJECTED`
+  with `reason=position_changed`, `executed_frames=0`, no `get_execution`
+  record, and the player still at (2600, -1480). No input reached the game.
+- `right:60` with `Abort(timeout_frames=8)` returned `ABORTED`, `reason=timeout`,
+  `at_frame=8`, `executed_frames=9` in 0.187s of wall time. The extra frame is
+  the stop request itself: it is dequeued on the next `Engine.Update`, so one
+  frame always lands after the decision. Expect `executed = at + 1`.
+- `right:40` into the wall at x≈2624 returned `ABORTED`, `reason=stalled`,
+  `executed_frames=36` (24 frames of travel, then 12 still frames).
+
+That run also exposed a defect that the stubs could not: `get_execution`
+returns no `executed_frames` while a job is running -- the field is written only
+by `Finish` -- so a watchdog reading it saw zero forever and neither
+`timeout_frames` nor `stall_frames` could ever trip. The executor now derives
+the count from the room frame counter (`state.frame - start.frame`), which
+advances on the same `Level.Update` that applies one input set, and takes the
+larger of the two sources. `tests/test_executor.py::FrameOnly` reproduces the
+bridge's shape.
+
+Collaboration path, four steps with a 1.2s scripted planner:
+
+- Every `VERIFY` carried the id of the `ANCHOR` before it; all four were
+  `LANDED` at 14 frames.
+- `pause_game`/`resume_game` were never called, and the room frame counter
+  advanced from 72017 to 72486 across the run: the game kept running while the
+  planner was thinking.
+- `SESSION` reported `rejected=0`, `superseded=0`, `freezes=0`.
+
+Unstable-world branches, forced with `still_for=0.8 --anchor-timeout 0.08`:
+
+- Default `--on-unstable wait` ended on `NO_ANCHOR` with zero pause calls.
+- `--on-unstable freeze` paused once, resumed before the first frame, and ran
+  both steps to `LANDED` with 0.25s frozen. Pause and resume each happened
+  exactly once.
+
+A real DeepSeek run (`--collab --steps 2`, no exit room) reported `anchors=3`,
+`steps=2`, `superseded=2`, `rejected=0`, `freezes=0`. The log reads as designed:
+a 68-frame plan missed its band, the model was still thinking when she drifted
+off and died, its plan arrived after the respawn anchor and was dropped unrun,
+and the next plan died mid-step. `SUPERSEDED` cost frames but no rejection; a
+plan that arrives after a death is wasted work, not a hazard.
+
+With that established, the collaboration promise is checkable from the decision
+log without watching the screen:
 
 1. Every executed step is preceded by an `ANCHOR` event and followed by a
    `VERIFY` event carrying the same `anchor` id.

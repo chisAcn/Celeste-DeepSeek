@@ -193,3 +193,48 @@ def test_executor_never_resets_the_room():
 def test_inverted_bands_are_rejected(band):
     with pytest.raises(ValueError):
         Precondition(x=band)
+
+
+class FrameOnly(Scripted):
+    """Bridge 0.3.2 as observed live: a running record carries no frame count.
+
+    ``get_execution`` only fills ``executed_frames`` when the job finishes, so a
+    watchdog that trusts that field is blind for the whole step. The room frame
+    counter is the clock that does advance.
+    """
+
+    def __init__(self, states):
+        super().__init__(states, finish_at=10 ** 6)
+        self.clock = 0
+
+    async def call(self, method, **params):
+        if method == "get_state":
+            self.calls.append((method, params))
+            self.clock += 1
+            data = self.states[0].model_dump()
+            data["frame"] = self.clock
+            return data
+        if method == "get_execution":
+            self.calls.append((method, params))
+            return {"execution_id": params["execution_id"], "status": "running"}
+        return await super().call(method, **params)
+
+
+def test_a_blind_frame_counter_still_times_out():
+    bridge = FrameOnly([state(x=30.0, vx=60.0)])
+    contract = StepContract(ok=Success(x=(0.0, 400.0)), abort=Abort(timeout_frames=3))
+    report = run(bridge, contract, sequence((["right"], 30)))
+
+    assert report.status == "ABORTED"
+    assert report.reason == "timeout"
+    assert report.at_frame is not None and report.at_frame >= 3
+    assert bridge.methods.count("stop") == 1
+
+
+def test_a_blind_frame_counter_still_notices_a_stall():
+    bridge = FrameOnly([state(x=30.0)])
+    contract = StepContract(ok=Success(x=(0.0, 400.0)), abort=Abort(stall_frames=3))
+    report = run(bridge, contract, sequence((["right"], 30)))
+
+    assert report.status == "ABORTED"
+    assert report.reason == "stalled"

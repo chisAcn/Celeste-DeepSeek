@@ -106,6 +106,18 @@ class ExecutorAgent:
         return TraceRow(frame=frames, x=player.x, y=player.y, vx=player.vx,
                         vy=player.vy, on_ground=player.on_ground, dashes=player.dashes)
 
+    def _live_frames(self, base: int, state: GameState, reported: int) -> int:
+        """How many frames of this step have been applied so far.
+
+        The running record on the bridge carries no frame count -- it is only
+        written when the job finishes -- so the room's frame counter is the
+        clock: it advances once per ``Level.Update``, the same tick that applies
+        one input set. Taking the larger of the two keeps the count honest
+        whichever side is ahead.
+        """
+        derived = state.frame - base if state.frame and base else 0
+        return max(reported, derived, 0)
+
     def _sample(self, sequence: ActionSequence, trace: list[TraceRow], state: GameState,
                 frames: int, still_since: int,
                 last: tuple[float, float] | None) -> tuple[int, int, tuple[float, float] | None]:
@@ -148,6 +160,7 @@ class ExecutorAgent:
                               contract=contract, start=start)
 
         last = _point(start)
+        base = start.frame
         still_since = 0
         trace: list[TraceRow] = []
         result: ExecutionResult | None = None
@@ -161,7 +174,8 @@ class ExecutorAgent:
                 state = await self.observe()
                 status = await self.client.call(
                     "get_execution", execution_id=sequence.execution_id)
-                frames = int(status.get("executed_frames") or 0)
+                frames = self._live_frames(
+                    base, state, int(status.get("executed_frames") or 0))
                 stall, still_since, last = self._sample(
                     sequence, trace, state, frames, still_since, last)
                 if status.get("status") != "running":

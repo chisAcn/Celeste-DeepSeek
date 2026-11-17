@@ -15,6 +15,8 @@ Real execute_frames returns execution_id and status=running immediately. Poll ge
 
 The updated bridge advertises `playability` and `frame_checkpoints` in `ping`. Call `get_playability` to check the same eligibility predicate used to accept input. Pass `trace_frames: true` with at most 120 requested frames to receive one post-update `checkpoints` entry per executed frame. Regular executions keep their existing response shape. These are real-time Level.Update samples of observable state. The bridge reports `tas: false` and `state_restore: false`.
 
+Polling caveat, confirmed live on 0.3.2: while a job is running, `get_execution` returns only `execution_id` and `status` -- `executed_frames` is written by `Finish`, so it reads as zero for the whole step. A supervisor that aborts on frame budget must therefore count frames itself; the client uses `get_state().frame - start.frame`, since the room counter advances on exactly the `Level.Update` that applies one input set. `stop` is dequeued on the next `Engine.Update`, so an abort decided at frame N reports N applied frames plus the one in flight.
+
 After installing the rebuilt DLL and restarting Celeste, enter room 1 and run `python -m agent.replay --output logs/diagonal-replay.jsonl`. The control is eight frames of up+right+dash. The report requires displacement, a consumed dash and three matching replays. When tracing is available it identifies the first differing frame.
 
 ### Optional CelesteTAS and Speedrun Tool integration
