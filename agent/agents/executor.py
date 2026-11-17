@@ -160,6 +160,7 @@ class ExecutorAgent:
         if rejection is not None:
             return StepReport(status="REJECTED", reason=rejection,
                               execution_id=sequence.execution_id,
+                              actions=list(sequence.actions),
                               planned_frames=planned, executed_frames=0,
                               contract=contract, start=start)
 
@@ -224,6 +225,7 @@ class ExecutorAgent:
 
         return StepReport(status=status, reason=reason,
                           execution_id=sequence.execution_id,
+                          actions=list(sequence.actions),
                           planned_frames=planned, executed_frames=executed,
                           at_frame=stopped_at if status in {"ABORTED", "DIED"} else None,
                           contract=contract, start=start, end=end, trace=trace)

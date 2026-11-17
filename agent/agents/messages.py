@@ -147,6 +147,7 @@ class StepReport(Schema):
     status: StepStatus
     reason: str | None = None
     execution_id: str
+    actions: list[FrameAction] = Field(default_factory=list)
     planned_frames: int = 0
     executed_frames: int = 0
     at_frame: int | None = None

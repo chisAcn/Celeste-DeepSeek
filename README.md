@@ -32,7 +32,7 @@
 | 已通关房间 | 6b（→6c）、6c（→7），路线已固化为可复现宏 |
 | LLM 闭环 | 已验证「规划→校验→执行→观测」单步与三步闭环（Codex 模式，落点均命中预测区间） |
 | 双 Agent 协同 | `--collab` 实机验证：4 步零暂停、`rejected=0`；不稳定世界两条分支均按预期收敛 |
-| 测试 | `67 passed`，ruff clean |
+| 测试 | `81 passed`，ruff clean |
 | 未完成 | LLM 尚未自主通关整章；6b/6c 的路线是人机协作推出的宏，不是模型自己想的 |
 
 **6b 通关**：房间 `Celeste/1-ForsakenCity`，终点 `6c` (2332,-1304)
@@ -223,6 +223,27 @@ python -m agent.main --real --mode deepseek --collab --exit-room 6b --success-ro
 世界一直不静止（比如站在移动平台上）时两种处理：`--on-unstable wait`（默认，等满 `--anchor-timeout` 秒后放弃，全程不冻结）或 `--on-unstable freeze`（退化成暂停一次模型调用，给移动平台房间用，代价是那几秒画面是冻的）。`--think-timeout` 约束单次模型调用，`--max-retries` 约束连续未落地次数。
 
 单循环路径（不带 `--collab`）保留原有的 `--settle`、`--pause-planning` 和 stale 前置；`--collab` 与 `--pause-planning` 互斥。
+
+### 路线重放
+
+模型最贵也最不可靠的地方是**即兴**：一个没走过的房间，它只能猜。而「从这里、这套按键、落回那里」已经在同一台机器上跑通过一次，那句承诺比任何提示词都强。所以每次落地都会留下一条路线：起点、动作、落点。
+
+下一个锚点如果**正好站在某条路线的起点上**（同房间、着地、冲刺数够、两轴都在 2px 内），就直接重放，不问模型——零延迟、零漂移，同一个问题不会有第二个答案。
+
+```
+step1  LANDED  latency 1.0   hop in place
+step2  LANDED  latency 0.0   replay learned-1
+step3  LANDED  latency 0.0   replay learned-1
+model calls 1  replays 2  routes 1
+```
+
+这是房间 7 的实机输出：模型只回答了一次，后两步是重放。匹配容差故意卡在 2px——路线是对物理的承诺，放宽就等于在一条已经不合适的檐板上重放旧弧线。
+
+路线有两个来源。`--skills` 从技能库读进来的是**回放验证过**的（`verified_start`/`verified_end` + 成功次数），可以直接重放；本局内新学的是「落地过一次」，证据更弱，所以**连续失手两次就退出轮换**，不会第三次还硬放。命中与失手都记在 `SkillBook` 里，`--no-replay` 可以整体关掉、退回纯模型规划。
+
+重放的计划仍然走完整契约：前置钉在锚点上，成功带是「上次落点 ±6px」，超时是「本条动作帧数 + slack」。落点偏出带就是 `MISSED`——不是要藏起来的事故，而是降级该路线的依据。
+
+配套的还有结局回执的加厚：`StepReport` 现在自带 `actions`，规划器拿到的不再只是「成了/没成」，而是 `status`（`ABORTED` 还是 `UNSATISFIED`）、`reason`（`timeout`/`stalled`/`x_out_of_band`）、`at_frame`（第几帧断的）、以及一条抽稀到 6 个点的轨迹。这三者指向完全不同的下一个计划：`ABORTED` 是世界在计划执行期间变了，`UNSATISFIED` 是计划本身判断错了。
 
 ### 单循环路径的防漂移
 

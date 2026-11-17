@@ -125,6 +125,9 @@ class TeamSession:
             self.stop.set()
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+            # The last step's outcome has no next plan waiting for it, but the
+            # route book should still learn from it before the session closes.
+            self.planner.drain(self.outcomes)
             if self._paused:
                 await self._resume()
             self.event({"state": "SESSION", **self.stats.summary(),

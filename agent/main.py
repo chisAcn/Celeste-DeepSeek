@@ -320,7 +320,8 @@ async def run(client, mode, steps=20, action_prior=None, *, settle=False, exit_r
 
 async def run_collab(client, mode, *, steps=12, skills=None, exit_room=None,
                      success_room=None, action_prior=None, think_timeout=60.0,
-                     anchor_timeout=8.0, unstable="wait", max_retries=3):
+                     anchor_timeout=8.0, unstable="wait", max_retries=3,
+                     replay=True):
     """Plan in a separate task while the executor stands by.
 
     The two agents share only queues, so the model call can take as long as it
@@ -354,7 +355,7 @@ async def run_collab(client, mode, *, steps=12, skills=None, exit_room=None,
 
         planner = PlannerAgent(plan_fn, skills=skills, exit_room=exit_room,
                                success_room=success_room, action_prior=action_prior,
-                               timeout=think_timeout)
+                               timeout=think_timeout, replay=replay)
         session = TeamSession(
             ExecutorAgent(client, ToolRegistry(client)), planner,
             exit_room=exit_room, success_room=success_room, max_steps=steps,
@@ -368,6 +369,8 @@ async def run_collab(client, mode, *, steps=12, skills=None, exit_room=None,
             except (OSError, RuntimeError, TimeoutError):
                 pass
         stats = session.stats.summary()
+        stats["planner_replays"] = planner.replays
+        stats["routes"] = len(planner.book)
         print("session " + json.dumps(stats, ensure_ascii=False))
         return verdict
     finally:
@@ -400,6 +403,8 @@ async def main():
                              "keep standing by, or pause the room while planning")
     parser.add_argument("--max-retries", type=int, default=3,
                         help="consecutive steps without a landing before giving up (--collab)")
+    parser.add_argument("--no-replay", action="store_true",
+                        help="never replay a route that starts on the anchor; always ask the model")
     args = parser.parse_args()
     if (args.settle or args.exit_room) and args.mode not in {"codex", "deepseek"}:
         parser.error("--settle and --exit-room require --mode codex or --mode deepseek")
@@ -409,6 +414,8 @@ async def main():
         parser.error("--collab requires --mode codex or --mode deepseek")
     if args.collab and args.pause_planning:
         parser.error("--collab replaces --pause-planning; use --on-unstable freeze instead")
+    if args.no_replay and not args.collab:
+        parser.error("--no-replay only applies to --collab")
     if args.collab and args.settle:
         parser.error("--collab always waits for a still landing; drop --settle")
     if args.success_room and not args.exit_room:
@@ -445,7 +452,7 @@ async def main():
                     exit_room=args.exit_room, success_room=args.success_room,
                     skills=skills, think_timeout=args.think_timeout,
                     anchor_timeout=args.anchor_timeout, unstable=args.on_unstable,
-                    max_retries=args.max_retries))
+                    max_retries=args.max_retries, replay=not args.no_replay))
             else:
                 steps = args.steps or (3 if args.mode in {"codex", "deepseek"} else 20)
                 print(await run(client, args.mode, steps=steps, action_prior=action_prior,

@@ -16,12 +16,16 @@ import math
 import time
 
 from agent.agents.messages import (
+    Abort,
     Anchor,
     PlanFailure,
     PlannedStep,
+    Precondition,
     StepContract,
     StepOutcome,
+    Success,
 )
+from agent.agents.skills import Replay, SkillBook
 from agent.knowledge import MOVEMENT_REFERENCE
 from agent.protocol import ActionSequence, GameState
 from agent.tas_training import action_key
@@ -60,7 +64,8 @@ class PlannerAgent:
     def __init__(self, plan_fn, *, skills=None, exit_room=None, success_room=None,
                  action_prior=None, history: int = 3, timeout: float = 60.0,
                  slack: int = 30, position_slack: float = 2.0,
-                 frozen_slack: float = 8.0):
+                 frozen_slack: float = 8.0, book: SkillBook | None = None,
+                 replay: bool = True):
         self.plan_fn = plan_fn
         self.skills = list(skills or [])
         self.exit_room = exit_room
@@ -71,6 +76,13 @@ class PlannerAgent:
         self.slack = slack
         self.position_slack = position_slack
         self.frozen_slack = frozen_slack
+        self.replay_enabled = replay
+        self.replays = 0
+        self.book = book if book is not None else SkillBook()
+        for skill in self.skills:
+            entry = Replay.from_skill(skill)
+            if entry is not None:
+                self.book.add(entry)
         self.history: list[dict] = []
         self.previous_action: str | None = None
         self.plans = 0
@@ -128,6 +140,16 @@ class PlannerAgent:
                 hint.model_dump()
                 for hint in self.action_prior.suggest(self.previous_action,
                                                       state.player.dashes)]
+        replayable = self.book.describe(state.room.name)
+        if replayable:
+            context["replayable_routes"] = replayable
+            context["replay_guidance"] = (
+                "replayable_routes were already sent from their recorded start. When "
+                "an anchor sits exactly on one, it is replayed automatically and you "
+                "are not asked at all -- so these entries tell you what the runner "
+                "will do without you, not what to copy. Do not approximate one from a "
+                "different position: that is a new plan, and its arc will not match. "
+                "A route with misses > 0 has already failed somewhere near here.")
         return context
 
     # -- contract --------------------------------------------------------
@@ -149,20 +171,36 @@ class PlannerAgent:
     # -- bookkeeping -----------------------------------------------------
 
     def record(self, outcome: StepOutcome):
-        """Keep a compact trace for the next prompt."""
+        """Keep a compact trace for the next prompt.
+
+        The verdict alone is not actionable: ``ABORTED`` says the world moved
+        while the plan ran, ``UNSATISFIED`` says the plan was wrong about it, and
+        the frame number says where. The trace is thinned to the shape of the
+        arc rather than every sample, because the prompt is the scarce resource.
+        """
         report = outcome.report
         row = {
             "actions": [action.model_dump() for action in outcome.actions],
             "verdict": outcome.verdict,
+            "status": None if report is None else report.status,
+            "reason": None if report is None else report.reason,
             "from": None if report is None else _point(report.start),
             "to": None if report is None else _point(report.end),
             "settled": _point(outcome.settled),
+            "planned": None if report is None else report.planned_frames,
+            "executed": None if report is None else report.executed_frames,
+            "at_frame": None if report is None else report.at_frame,
             "detail": outcome.detail,
         }
+        if report is not None and report.trace:
+            row["trace"] = _thin(report.trace)
         self.history.append(row)
         del self.history[:-24]
         if outcome.actions:
             self.previous_action = action_key(outcome.actions[-1].buttons)
+        changed = self.book.note(outcome)
+        if changed is not None:
+            row["route"] = changed
 
     def drain(self, outcomes: asyncio.Queue) -> None:
         while True:
@@ -170,6 +208,25 @@ class PlannerAgent:
                 self.record(outcomes.get_nowait())
             except asyncio.QueueEmpty:
                 return
+
+    def _replay_step(self, anchor: Anchor, replay: Replay) -> PlannedStep:
+        """Send a known route again instead of asking the model.
+
+        The contract is the route's promise: it begins where the anchor stands,
+        and it has to land back within a few pixels of where it landed last time.
+        A miss is not something to hide -- it is what demotes the route.
+        """
+        ok = Success()
+        if replay.end_x is not None:
+            ok = Success(
+                x=(replay.end_x - 6, replay.end_x + 6),
+                y=None if replay.end_y is None else (replay.end_y - 6, replay.end_y + 6))
+        contract = StepContract(
+            pre=Precondition.from_state(anchor.state, self.position_slack),
+            ok=ok, abort=Abort(timeout_frames=replay.frames + self.slack))
+        return PlannedStep(anchor_id=anchor.id, actions=list(replay.actions),
+                           contract=contract, goal=f"replay {replay.name}",
+                           reason="a route that already ran starts exactly here")
 
     # -- the task --------------------------------------------------------
 
@@ -182,6 +239,11 @@ class PlannerAgent:
                 self.drain(outcomes)
                 continue
             self.drain(outcomes)
+            replay = self.book.match(anchor.state) if self.replay_enabled else None
+            if replay is not None:
+                self.replays += 1
+                await _latest(plans, self._replay_step(anchor, replay))
+                continue
             started = time.monotonic()
             try:
                 plan = await asyncio.wait_for(self.plan_fn(self.context(anchor)),
@@ -215,6 +277,15 @@ class PlannerAgent:
                 continue
             self.plans += 1
             await _latest(plans, step)
+
+
+def _thin(trace, limit: int = 6) -> list[list]:
+    """First, last and an even spread of the samples in between."""
+    rows = trace if len(trace) <= limit else (
+        [trace[0]] + [trace[round(i * (len(trace) - 1) / (limit - 1))]
+                      for i in range(1, limit - 1)] + [trace[-1]])
+    return [[row.frame, round(row.x, 1), round(row.y, 1), round(row.vy, 1), row.on_ground]
+            for row in rows]
 
 
 def _point(state: GameState | None) -> list[float] | None:

@@ -107,7 +107,8 @@ def build(plan_fn, executor=None, **options):
     options.setdefault("max_steps", 4)
     options.setdefault("settle_timeout", 0.4)
     options.setdefault("think_budget", 5.0)
-    planner = PlannerAgent(plan_fn, exit_room=options.get("exit_room"))
+    replay = options.pop("replay", True)
+    planner = PlannerAgent(plan_fn, exit_room=options.get("exit_room"), replay=replay)
     return TeamSession(executor, planner, **options), executor
 
 
@@ -306,13 +307,28 @@ def test_the_step_is_reported_back_to_the_planner():
         seen.append(context["history"])
         return FixturePlan(actions=[right(10)])
 
-    session, _ = build(plan, max_steps=2)
+    session, _ = build(plan, max_steps=2, replay=False)
     asyncio.run(session.run())
 
     second = seen[1]
     assert second and second[0]["verdict"] == "LANDED"
     assert second[0]["actions"] == [{"buttons": ["right"], "frames": 10}]
     assert second[0]["settled"] == [2000.0, -1128.0]
+
+
+def test_a_landing_becomes_a_route_the_next_anchor_replays():
+    calls = []
+
+    async def plan(context):
+        calls.append(context)
+        return FixturePlan(actions=[right(10)])
+
+    session, executor = build(plan, max_steps=2)
+    asyncio.run(session.run())
+
+    assert len(calls) == 1          # only the first anchor needed the model
+    assert len(executor.runs) == 2  # the second was replayed for real
+    assert session.stats.landed == 2
 
 
 def test_a_missed_landing_is_judged_on_the_settled_state():

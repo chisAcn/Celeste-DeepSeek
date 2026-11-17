@@ -174,3 +174,20 @@ log without watching the screen:
    stays small for a player standing still.
 5. On a moving platform, the run ends with `NO_ANCHOR` (default) or falls back to
    `FREEZE` with `--on-unstable freeze`; it must not spin.
+
+Route replay was exercised live in room 7 on 2026-11-17 with a scripted planner
+standing in for the model (1.0s per call):
+
+- Step 1 came from the planner. Steps 2 and 3 reported `goal: replay learned-1`
+  with `latency: 0.0`, all three `LANDED` at 14 frames, and the model was called
+  exactly once.
+- The promoted route recorded `start: [2600, -1480] -> end: [2600, -1480]`,
+  `hits: 2`, `misses: 0`, `origin: session`.
+- The first run showed `hits: 1`: the last step's outcome had no next plan
+  waiting for it, so it was never drained into the book. `TeamSession.run` now
+  drains once on the way out, which is why the second run counts both replays.
+
+A replay is not a shortcut past the contract. It is sent as a normal plan with
+the precondition pinned to the anchor, the success band at "last landing +- 6px"
+and a frame budget of "route frames + slack", so a route that no longer fits its
+ledge reports MISSED and loses a hit instead of quietly drifting.
