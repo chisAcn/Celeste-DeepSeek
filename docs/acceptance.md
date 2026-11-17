@@ -118,9 +118,24 @@ Bridge 0.3.3 closes the hole at the source instead: the running record carries
 `executed_frames` and is rewritten on every tick, so the count is exact and the
 room clock becomes a fallback for older bridges. The client prefers the reported
 value whenever the key exists (`tests/test_executor.py::ClockAhead` pins that
-precedence). The DLL was built and installed on 2026-11-17 but not yet loaded --
-Celeste was closed at the time, and assemblies load only at process start.
-Expect `ping` to report `mod_version` 0.3.3 before trusting this path.
+precedence). Loaded 2026-11-17 and confirmed by `ping` reporting
+`mod_version: 0.3.3`:
+
+- A raw 30-frame run polled `executed_frames` at 0 → 9 → 14 → 19 → 24 → 29 while
+  the job was still running, so the field is live rather than post-mortem.
+- The same run showed why the clock fallback was loose: the start observation was
+  frame 1014 and the job was accepted at frame 1017, three ticks later (`save_state`
+  and `execute_frames` each take one). Derived counts were therefore biased high
+  by however many calls preceded execution.
+- `right:60` with `Abort(timeout_frames=8)` returned `ABORTED`, `at_frame=9`,
+  `executed_frames=10`. The count is exact, but the decision lands on a sample:
+  each poll costs a `get_state` and a `get_execution`, and both are serviced on
+  frame boundaries, so the executor sees every other frame and reports the first
+  one at or over the budget. Expect `at <= budget + 2` and `executed = at + 1`.
+- The stall case reports the same way: `at_frame=37`, `executed_frames=38`
+  against `stall_frames=12` after 24 frames of travel.
+- The collaboration path is unchanged by the upgrade: three steps, all `LANDED`
+  at 14 frames, `rejected=0`, `superseded=0`, zero pause calls.
 
 Collaboration path, four steps with a 1.2s scripted planner:
 

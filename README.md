@@ -250,9 +250,11 @@ python -m agent.main --real --mode deepseek --collab --exit-room 6b --success-ro
 
 执行是实时的（每 `Level.Update` 应用一次输入），所以中止能做到帧级——不必把动作切段，切段会在间隙松开按键，毁掉跳跃弧线。
 
-实测（桥接 0.3.2，房间 7）：`right:60` + `timeout_frames=8` 在 0.187 秒内停在 `at_frame=8`，但报告里 `executed_frames=9`。多出来的一帧是停止请求本身——它要等下一个 `Engine.Update` 才被取出，所以中止帧之后总有一帧会落地。判据写成 `executed = at + 1`，不要指望零开销的瞬时刹车。
+实测（房间 7）：`right:60` + `timeout_frames=8` 在 0.22 秒内停在 `at_frame=9`，报告 `executed_frames=10`。多出来的一帧是停止请求本身——它要等下一个 `Engine.Update` 才被取出，所以中止帧之后总有一帧会落地。判据写成 `executed = at + 1`，不要指望零开销的瞬时刹车。
 
-同一轮实测还暴露了一个桩测试测不出的坑：`get_execution` 在任务运行期间**不报** `executed_frames`（该字段由 `Finish` 写入），看门狗若读它就会永远看到 0，超时与停滞条款全成死条款。执行器改为用房间帧计数推算（`get_state().frame - 起始帧`），它恰好在施加一帧输入的那个 `Level.Update` 上加一。桥接 0.3.3 起改为每帧回写 `executed_frames`，客户端优先用这个自报值，房间时钟只作为旧版桥接的兜底。
+`at_frame` 偶尔会比预算多一帧，这不是计数不准，而是采样问题：每轮巡检要发 `get_state` 和 `get_execution` 两次调用，两次都要排在帧边界上，所以实际只能看到隔帧，中止决策落在**第一个 ≥ 预算的采样点**。经验范围是 `at ≤ 预算 + 2`。
+
+同一轮实测还暴露了一个桩测试测不出的坑：`get_execution` 在任务运行期间**不报** `executed_frames`（该字段由 `Finish` 写入），看门狗若读它就会永远看到 0，超时与停滞条款全成死条款。桥接 0.3.3 起改为每帧回写，`get_execution` 在运行中就能读到 9 → 14 → 19 这样的活计数；客户端优先用这个自报值，房间帧计数（`get_state().frame - 起始帧`）只作为旧版桥接的兜底——实测那个兜底会高估：起始观测在 frame 1014，任务受理已是 1017，中间三次调用的帧全算进去了。
 
 ---
 
