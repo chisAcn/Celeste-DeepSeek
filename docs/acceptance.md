@@ -191,3 +191,18 @@ A replay is not a shortcut past the contract. It is sent as a normal plan with
 the precondition pinned to the anchor, the success band at "last landing +- 6px"
 and a frame budget of "route frames + slack", so a route that no longer fits its
 ledge reports MISSED and loses a hit instead of quietly drifting.
+
+Room 7 was cleared live on 2026-11-17, segment by segment, against the same
+savestate:
+
+- Steps 1-2 (spawn to `e3`): `restore_and_execute` ends at `(2738, -1592)` with
+  `on_ground: true`, `dashes: 1`, `dead: false`. The savestate was written from
+  that position so step 3 started where step 2 finished.
+- Step 3 (`e3` to the exit): the run ends in room `8` at `(2719, -1704)`, resting
+  on ground. The execution reports `interrupted` rather than `completed` because
+  the room transition cancels the job mid-sequence -- expected, not a fault.
+
+Two numbers from this room are worth keeping because they contradict the
+reference sheet: a jump is 27px (`varJump` clamps `vy` at -105 for eleven
+frames), and an up dash adds 42px. Together they are 69px, which is why the
+80px between the two falling blocks cannot be crossed without the wall bounce.
