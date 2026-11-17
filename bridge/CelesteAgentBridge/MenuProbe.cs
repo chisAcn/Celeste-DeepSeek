@@ -146,7 +146,7 @@ internal static class SaveProbe {
             ["assist_mode"] = data.AssistMode,
             ["variant_mode"] = data.VariantMode,
             ["cheat_mode"] = data.CheatMode,
-            ["last_area"] = J.Value(J.Get(data, "LastArea")),
+            ["last_area"] = AreaKeyJson(data),
             ["areas"] = areas,
             ["areas_error"] = areasError
         };
@@ -161,7 +161,7 @@ internal static class SaveProbe {
                 array.Add(new JsonObject {
                     ["mode"] = index++,
                     ["deaths"] = J.I(mode, "Deaths"),
-                    ["time_ticks"] = J.Value(J.Get(mode, "Time")),
+                    ["time_ticks"] = J.Long(mode, "Time"),
                     ["strawberries"] = J.I(mode, "Strawberries"),
                     ["mapped"] = J.B(mode, "Mapped")
                 });
@@ -170,9 +170,20 @@ internal static class SaveProbe {
         return array;
     }
 
+    static JsonNode? AreaKeyJson(SaveData data) {
+        var key = J.Get(data, "LastArea");
+        if (key == null) return null;
+        int id = J.I(key, "ID");
+        return new JsonObject {
+            ["id"] = id,
+            ["mode"] = J.Value(J.Get(key, "Mode")),
+            ["name"] = AreaName(id)
+        };
+    }
+
     static string? AreaName(int id) {
         try {
-            var areas = J.Get(typeof(AreaData), "Areas") as IList;
+            var areas = J.Static(typeof(AreaData), "Areas") as IList;
             if (areas == null || id < 0 || id >= areas.Count) return null;
             return J.Get(areas[id]!, "Name") as string;
         } catch { return null; }
@@ -180,10 +191,17 @@ internal static class SaveProbe {
 
     static string? Filename(SaveData data) {
         try {
-            var method = data.GetType().GetMethod("GetFilename",
-                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance,
-                null, Type.EmptyTypes, null);
-            return method?.Invoke(data, null) as string;
-        } catch { return null; }
+            for (var type = data.GetType(); type != null; type = type.BaseType) {
+                foreach (var method in type.GetMethods(
+                             BindingFlags.Public | BindingFlags.NonPublic
+                             | BindingFlags.Instance | BindingFlags.DeclaredOnly)) {
+                    if (method.Name != "GetFilename") continue;
+                    var args = method.GetParameters().Length == 0
+                        ? null : new object[] { data.FileSlot };
+                    if (method.Invoke(data, args) is string path) return path;
+                }
+            }
+        } catch { }
+        return null;
     }
 }

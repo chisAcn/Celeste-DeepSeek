@@ -48,8 +48,14 @@ internal static class J {
         return found;
     }
 
-    public static object? Get(object target, string name) {
-        var member = Find(target.GetType(), name);
+    public static object? Get(object target, string name) => Read(target.GetType(), target, name);
+
+    // Static members need the declaring type: Get(typeof(X), name) would search
+    // the members of RuntimeType instead of X, which silently reads null.
+    public static object? Static(Type type, string name) => Read(type, null, name);
+
+    static object? Read(Type type, object? target, string name) {
+        var member = Find(type, name);
         try {
             return member switch {
                 FieldInfo f => f.GetValue(target),
@@ -57,6 +63,20 @@ internal static class J {
                 _ => null
             };
         } catch { return null; }
+    }
+
+    public static long? Long(object target, string name) {
+        var direct = Get(target, name);
+        if (direct is long l) return l;
+        if (direct is int i) return i;
+        // Fall back to any long member that mentions time, so a renamed field in
+        // a future game version degrades to a guess rather than null.
+        foreach (var field in target.GetType().GetFields(
+                     BindingFlags.Public | BindingFlags.Instance))
+            if (field.FieldType == typeof(long)
+                && field.Name.Contains("time", StringComparison.OrdinalIgnoreCase))
+                return field.GetValue(target) as long?;
+        return null;
     }
 
     // Probes must never die on one hostile field (collections, EntityID sets,

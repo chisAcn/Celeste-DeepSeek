@@ -17,13 +17,14 @@ internal static class CollisionSnapshot {
         long solidArea = 0;
         string source = "collider";
 
-        // Preferred source: the engine's own collider rectangles. Tile char
-        // arrays are indexed in a per-level space that silently reads empty.
-        var engineRects = SolidProbe.Rectangles(level);
+        // Preferred source: the engine's own collider rectangles, merged and
+        // clipped to the room. Tile char arrays are indexed in a per-level
+        // space that silently reads empty.
+        var engineRects = SolidProbe.Rectangles(level, bounds);
         if (engineRects.Count > 0) {
             foreach (var rect in engineRects) {
-                if (rects.Count >= maxRects) { complete = false; break; }
                 solidArea += (long)rect.Width * rect.Height;
+                if (rects.Count >= maxRects) { complete = false; break; }
                 rects.Add(Rect(rect));
             }
         } else {

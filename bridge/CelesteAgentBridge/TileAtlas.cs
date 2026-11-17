@@ -46,9 +46,9 @@ internal static class TileAtlas {
         // Tile char arrays are indexed in a per-level space we cannot trust, so
         // the map is painted from the collider rectangles the engine actually
         // collides against.
-        var solidRects = SolidProbe.Rectangles(level);
+        var solidRects = SolidProbe.Rectangles(level, area);
         int painted = SolidProbe.Paint(
-            solidRects, area, grid, cols, rows, area.Left, area.Top, '#');
+            solidRects, area.Left, area.Top, grid, cols, rows, '#');
 
         // Priority keeps a background decal from erasing terrain or a spike.
         var rank = new byte[rows, cols];
@@ -77,8 +77,12 @@ internal static class TileAtlas {
 
         var player = level.Tracker.GetEntity<Player>();
         if (player != null) {
-            int px = (int)(player.X - area.Left) / Tile;
-            int py = (int)(player.Y - area.Top) / Tile;
+            // Use the collider centre: Madeline's origin sits exactly on the
+            // floor, so the origin tile would erase the ground she stands on.
+            int originX = player.Collider != null ? player.Collider.Bounds.Center.X : (int)player.X;
+            int originY = player.Collider != null ? player.Collider.Bounds.Center.Y : (int)player.Y;
+            int px = (originX - area.Left) / Tile;
+            int py = (originY - area.Top) / Tile;
             if (px >= 0 && px < cols && py >= 0 && py < rows) grid[py, px] = 'M';
         }
 
