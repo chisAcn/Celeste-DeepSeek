@@ -1,219 +1,328 @@
-# Celeste TAS Agent
+# DeepSeek 玩 Celeste
 
-Python GPT planner + local Everest bridge, implementing Phase 0–3 foundations.
+让大模型在《蔚蓝》（Celeste）里实际操作的实验项目。它不靠截屏识别像素，而是通过一个 Everest Mod 把游戏的**真实状态**读出来——亚像素坐标、碰撞矩形、实体、房间出口——再把**帧级输入**写回去。
 
-## Setup
+目前已实机通关教学地图的 **6b** 和 **6c** 两个房间，当前停在房间 **7**。
 
-Python 3.12+: create a virtual environment, then `pip install -e ".[dev]"`.
-Run `python -m agent.main` for the offline flat Mock scenario.
-Run `pytest -q` and `ruff check .` for verification.
-
-Build real Mod: `./scripts/build_bridge.ps1 -CelesteDir 'F:\steam\steamapps\common\Celeste'`.
-Copy the generated Release/net8.0/CelesteAgentBridge.dll and everest.yaml into Celeste/Mods/CelesteAgentBridge, then restart the game.
-Enter a playable room and run `python -m agent.main --real --mode manual`.
-For GPT, set OPENAI_API_KEY and OPENAI_MODEL in environment and use `--mode gpt`. Environment files are not automatically loaded. API billing is separate from Codex.
-
-Manual plan example:
-```json
-{"goal":"move right","reason":"test movement","actions":[{"buttons":["right"],"frames":10}],"expected_x_min":0,"expected_x_max":10000}
+```
+┌──────────────────────────────┐
+│  DeepSeek / Codex  （1 Hz）  │  看状态 → 出多帧动作计划
+└──────────────┬───────────────┘
+               │ JSON 计划
+┌──────────────▼───────────────┐
+│  Python Agent（本地）        │  schema 校验 / 防漂移 / 技能回放
+└──────────────┬───────────────┘
+               │ JSON-Line over TCP 127.0.0.1:32123
+┌──────────────▼───────────────┐
+│  CelesteAgentBridge（C#）    │  读状态 · 写按键 · 存档 · 截图
+└──────────────┬───────────────┘
+               │
+        Celeste + Everest（60 fps）
 ```
 
-## Status and limitations
+核心判断是**分层**：大模型不适合逐帧操作，它的价值在于看到几何后用推理挑路线；真正的手感必须交给 60 fps 的本地执行器。所以本项目的实际形态是「LLM 出宏 / 本地跑宏 / 探针测量」，而不是「让模型一直按方向键」。
 
-- Real Mod compiles against locally installed Celeste/Everest assemblies: zero warnings/errors.
-- Tests cover protocol, bounds, duplicate execution IDs, malformed requests, timeouts, disconnects, execution polling and Mock end-to-end completion.
-- Mod installed and loaded in the real game. Verified ping, live state, one idle frame, and ten right frames in Prologue room 0: x=58 to x=70, actual count=10. Jump/dash/grab, death/respawn and room transitions remain UNVERIFIED.
-- No paid GPT call or real room completion verified. Phase 0–3 acceptance is not yet complete.
-- Mock is a flat protocol fixture, not Celeste physics. TAS integration, deterministic stepping and full-state restoration are not implemented.
-- Current planner has bounded steps/retries and an allowlisted tool registry; scalar observations lack geometry. Full state-machine recovery and richer observation remain follow-up work.
+---
 
-The bridge binds localhost:32123. One active execution at a time; each action replaces the held button set, [] releases all. Terminal execution releases injected input and restores manual controls. Disconnect, scene/room change, pause and death interrupt execution. Frame count measures Level.Update calls, not guaranteed physics steps. Escape/pause remains available. Do not run multiple controllers concurrently.
+## 当前进度
 
-Only source is published. Game binaries, logs, credentials and saves are ignored. Python CI does not require Celeste; C# builds locally against legal installed assemblies.
+| 项目 | 状态 |
+| --- | --- |
+| 桥接 Mod | `0.3.2`，实机加载，信息层 9 类探针全部通过 |
+| 已通关房间 | 6b（→6c）、6c（→7），路线已固化为可复现宏 |
+| LLM 闭环 | 已验证「规划→校验→执行→观测」单步与三步闭环（Codex 模式，落点均命中预测区间） |
+| 测试 | `31 passed`，ruff clean |
+| 未完成 | LLM 尚未自主通关整章；6b/6c 的路线是人机协作推出的宏，不是模型自己想的 |
 
-See docs/acceptance.md and docs/protocols.md.
+**6b 通关**：房间 `Celeste/1-ForsakenCity`，终点 `6c` (2332,-1304)
+**6c 通关**：竖井房间，终点房间 `7` (2600,-1465)
 
-## Codex-authorized playtest
+---
 
-Install the Codex CLI and run `codex login` with ChatGPT once. An existing
-ChatGPT login shown by `codex login status` can be reused. The playtest uses
-that login without requiring an OpenAI API key or storing a project token.
-It sends game observations and recent action outcomes to Codex for planning.
+## 环境
 
-```powershell
-python -m agent.main --mode codex --steps 1
-python -m agent.main --real --mode codex
-```
-
-The first command uses the simulated bridge. For the second, open a playable
-room in Celeste with the Everest bridge loaded. Codex proposes actions in a
-read-only session and the Agent validates and executes them through the
-bridge. The default budget is three steps, adjustable with `--steps`.
-`STOPPED` can mean the budget ended, while `SUCCESS` requires the bridge to
-report completion. See `logs/decisions.jsonl` for the executed plans.
-
-For an exit trial, start at the entrance of the desired room and run:
-
-```powershell
-python -m agent.main --real --mode codex --settle --exit-room 6b --steps 6
-```
-
-`--settle` waits up to three seconds for a stable grounded observation between
-plans. `--exit-room` confirms the starting room and also accepts a live player
-in a different room as success. The bridge supplies platform samples when
-available. It excludes tile terrain.
-
-## DeepSeek playtest
-
-Set `DEEPSEEK_API_KEY` in the environment and run the simulated bridge or the
-real game. `DEEPSEEK_MODEL` defaults to `deepseek-chat` and `DEEPSEEK_BASE_URL`
-to `https://api.deepseek.com`.
-
-```powershell
-python -m agent.main --mode deepseek --steps 1
-python -m agent.main --real --mode deepseek --settle --exit-room 6b --steps 6
-```
-
-DeepSeek plans through chat completions with JSON output; each reply is
-validated against the bounded action-plan schema before execution. The mode
-shares the Codex stale-plan guard: a plan is skipped without any input when
-the grounded state, dash count or position changed while the model was
-thinking. The default budget is three steps, adjustable with `--steps`, and
-`--tas-prior` supplies optional action hints the same way as `--mode gpt`.
-
-Replay-verified routes recorded by the Phase 6 skill workflow can be injected
-as planner hints. The planner receives each matching skill's start/end
-positions and exact action sequence, and is told to prefer replaying a skill
-when its start matches the current grounded position. `--success-room` narrows
-`--exit-room` so only the forward destination room counts as success.
-
-```powershell
-python -m agent.main --real --mode deepseek --settle --exit-room 6b --success-room 6c --steps 12 --skills logs/phase6-live-acceptance.sqlite3
-```
-
-With bridge 0.2.4 or newer, `--pause-planning` freezes the game while the
-model thinks and resumes right before execution. This removes observation
-drift on moving platforms (the main source of `STALE_PLAN` rejections) and
-pairs well with `--settle`.
-
-## Room inspection
-
-The bridge can describe the game instead of only moving Madeline. Every probe is
-read-only and safe to call while playing:
+Python **3.12**（3.13 下 `pydantic_core` 会报 `ArgsKwargs` 导入错误）。依赖 `pydantic` 与 `openai` SDK。
 
 ```shell
-python -m agent.inspect --what player --internals   # sub-pixel state, timers, raw fields
-python -m agent.inspect --what level                # chapter, timers, freeze frames, dialogue
-python -m agent.inspect --what room                 # neighbours, spawns, triggers, doorways
-python -m agent.inspect --what entities --fields    # entities with their own fields
-python -m agent.inspect --what collision            # solid rectangles + every collidable object
-python -m agent.inspect --what tiles                # ASCII map, one char per 8x8 tile
-python -m agent.inspect --what menu,save            # menus and save-file progress
-python -m agent.inspect --what capture --kind gameplay   # PNG of the gameplay layer
-python -m agent.room_map --objects                  # labelled map + object bounds + doorways
+pip install -e ".[dev]"
+# 或使用仓库内 vendored 依赖
+PYTHONPATH=".deps;." python -m pytest -q
 ```
 
-`agent.room_map` prints the room with a world-coordinate ruler, the player's current
-tile, every collidable object with its world bounds, and the neighbouring room on each
-side — usually the fastest way to answer "where is the exit".
+游戏侧需要已安装 **Everest**；`SpeedrunTool` 与 `CelesteTAS` 是可选依赖，存档/读档与 TAS 回放要用到。
 
-`get_collision` reports `complete: false` when terrain or objects were truncated, so a
-partial snapshot is never mistaken for an empty room. Terrain is read from the engine's
-own `SolidTiles` collider; `coverage.source` says which path was used and
-`coverage.solids` echoes the diagnostic, because the tile char arrays are indexed in a
-per-level space that can read empty without raising. Screenshots are two-phase
-(`capture` then `capture_result`) because pixels can only be read at the end of a render
-pass. `trajectory_start` / `trajectory_stop` record one row per update tick for
-simulator calibration.
-
-## Train from Celeste TAS
-
-The local action prior learns which button combinations tend to follow a previous
-combination. It trains on 1A and 1B, then tests held-out 2A against an unconditional
-frequency baseline. The parser keeps gameplay-room actions, expands bounded
-`Repeat` blocks and breaks the prediction context at unsupported inputs.
-Use Celeste Studio to flatten scripts with `Read` or `Play` before using them.
+### 编译并安装桥接
 
 ```powershell
+$env:CELESTE_DIR = 'F:\steam\steamapps\common\Celeste'
+./scripts/build_bridge.ps1
+# 等价于：
+dotnet build bridge/CelesteAgentBridge -c Release -p:CelesteDir=$env:CELESTE_DIR
+```
+
+把 `bin/Release/net8.0/CelesteAgentBridge.dll` 和 `everest.yaml` 复制到
+`Celeste/Mods/CelesteAgentBridge/`，然后**完全退出游戏再启动**。
+
+> .NET 程序集只在进程启动时加载一次，退回主菜单不算。改完 Mod 不重启，游戏里跑的还是旧版本。
+
+### 连通性自检
+
+```python
+import asyncio, json
+from agent.client import BridgeClient
+
+async def main():
+    async with BridgeClient(timeout=15) as c:
+        print(json.dumps(await c.call("ping"), ensure_ascii=False))
+
+asyncio.run(main())
+```
+
+返回里 `mod_version` 应当等于 `everest.yaml` 的版本号。这是判断「新代码到底加载了没有」最快的方法。
+
+---
+
+## 信息层
+
+桥接的价值一半在读。以下探针全部只读，游戏运行中可随时调用：
+
+```shell
+python -m agent.inspect --what all --json            # 一次拉全
+python -m agent.inspect --what player --internals    # 亚像素位置、命名状态、计时器、原始字段
+python -m agent.inspect --what level                 # 章节、房间、tick、死亡数、冻结帧、风力、对话
+python -m agent.inspect --what room                  # 四向邻接房间、出生点、触发区、过门坐标
+python -m agent.inspect --what entities --fields     # 实体固定 ID、分类、碰撞箱、专有属性
+python -m agent.inspect --what collision             # 实心地形矩形 + 所有可碰撞对象
+python -m agent.inspect --what tiles                 # ASCII 字符地图，一格 8×8 像素
+python -m agent.inspect --what menu,save             # 菜单结构、存档槽、章节进度
+python -m agent.inspect --what capture --kind gameplay   # 离屏渲染 PNG（gameplay 320×180 / level 全窗）
+```
+
+`agent.room_map` 把地图、坐标标尺、对象包围盒和出口拼成一张可读的图，是回答「出口在哪」最快的方式：
+
+```shell
+python -m agent.room_map --objects
+```
+
+几个实现上的坑，踩过才知道：
+
+- **地形不能读 tile 字符数组。** 那个数组按每关卡自己的坐标系索引，越界时静默返回 `'0'` 而不抛异常，于是满屋实心块的房间看起来是空的。现在地形从引擎真正参与碰撞的 `SolidTiles` 碰撞体栅格化而来，`coverage.source` 会标明走的哪条路。
+- **`SolidTiles` 是 `Grid`**，逐格展开会有两万多个 8×8 矩形把调用方预算撑爆。现在按房间裁剪并贪心合并，6b 从 1440 格压到 41 个矩形。
+- **`get_collision` 的 `complete` 是可信的**：地形或对象被截断时它返回 `false`，不会把「取到一半」伪装成「空房间」。
+- **截图是两阶段的**（`capture` → `capture_result`），像素只能在渲染末尾读。
+- **`trajectory_start` / `trajectory_stop`** 按 update tick 逐帧记录一行，用于校准物理常数。
+
+---
+
+## 操作与测量工具
+
+这几个脚本是项目里真正干活的部分。它们的共同前提：**死亡会原地重生，试错比规划便宜**。
+
+### `agent.step` — 分段执行器
+
+一次调一段，跑完打印她在哪。支持等待条件，因为很多操作必须卡在正确的时机：
+
+```shell
+python -m agent.step --actions "right:24;right,jump:26" --trace
+python -m agent.step --wait-mover-x-ge 0:2156 --wait-lift 8 --actions "jump:8;right,dash:9;right:3"
+python -m agent.step --wait-mover-y-le 1:-1206 --actions "right,dash:10;right:8"
+```
+
+| 选项 | 作用 |
+| --- | --- |
+| `--wait-mover-x-ge/-le`、`--wait-mover-y-ge/-le` | 等某个移动平台到达指定坐标 |
+| `--wait-lift` | 等 `lift_speed` 衰减到阈值以下（离开移动平台起跳时必须） |
+| `--stable N` | 等第 N 个平台停稳 |
+| `--trace` | 逐帧打印坐标/速度/状态 |
+
+### `agent.sweep` — 候选批量对拍
+
+从同一个 savestate 出发，用 `restore_and_execute` 跑多个候选动作序列，输出峰值高度、最远 x、落点。6c 一共试了 40 多个候选，手工比对是不现实的。
+
+```shell
+python -m agent.sweep --save \
+  --actions "right:24;right,jump:21;right:15;right,dash:10;right:6;left:4;right:30" \
+  --actions "right:24;right,jump:21;right:16;right,dash:10;right:45"
+```
+
+### 其他
+
+| 工具 | 用途 |
+| --- | --- |
+| `agent.trace_run` | 带前置条件（`--pre`、`--wait-mover`）的逐帧轨迹探测 |
+| `agent.replay` | 重放并比较多次执行的位置/速度偏差（确定性审计） |
+| `agent.tas_play` | 按 `#lvl_<room>` 分节回放 `.tas` 文件 |
+| `agent.restore_probe` | 存档/恢复的探针封装 |
+
+---
+
+## 已通关路线
+
+完整记录在 `data/routes/6b.md` 和 `data/routes/6c.md`，包含几何、失败方案和实测常数。
+
+### 6b — 两块 ZipMover 与一道檐板
+
+```
+1) right:24 ; right,jump:26                      跳上 ZipMover#0
+2) 等 mover0.x≥2156、lift_speed≤8，然后
+   jump:8 ; right,dash:9 ; right:3               直跳 + 右冲越过尖刺，落 ZipMover#1
+3) jump:14 ; up,dash:10 ; right:24               跳+上冲够到 -1264 平台
+4) jump:12 ; up,right,dash:10 ; right:22          对角冲翻过檐板，登顶 -1304
+5) right:14                                      切房间到 6c
+```
+
+三个关键发现：
+
+- **ZipMover 不动，踩上去才动。** 盯了 350 帧零位移——所以第一跳完全不需要卡时机，比预想的简单。
+- **跳离移动平台会继承载体速度。** 她自身 `speed.x=0`，但 `lift_speed.x=201`，起跳首帧就变 `vx=257.6`，三帧后一头撞进尖刺。必须等它衰减。
+- **竖直那块两端都是墙。** 低位撞 x≈2272 的墙面，高位撞 2232 处头顶檐板；普通跳（27px）两头都过不去。唯一解是**跳 + 上冲刺**（27+36=63px）从头顶翻出去，再用对角冲刺横跨到出口平台。
+
+### 6c — 两个弹簧与一次顶点冲刺
+
+```
+1) right:24 ; right,jump:21                       跳上弹簧①
+2) right:15 ; right,dash:10 ; right:6 ; left:4    右冲 + 六帧刹车，落弹簧②右半
+   right:30                                       （卡在 x2492，容错 6px）
+3) 弹跳顶点 → up,right,dash:10 ; right:60          上 -1392 台阶
+4) right,jump:22 ; right:16                       上 -1416 平台
+5) jump:8 ; up,dash:10                            穿过顶部 16px 洞口 → 房间 7
+```
+
+四个测出来的数据：
+
+1. **弹簧只给 52px，不是 78px。** `vy=-185` 从 -1318 弹起，顶点 -1370，反复弹跳只循环不加高。
+2. **水平冲刺会把 vy 清零。** 所以冲刺是弹簧高度的**替代**而非叠加——早期所有尝试都因此矮了 20~30px。
+3. **`Player.Position` 是碰撞箱的底部中心**，不是左下角。之前所有看着「还剩 4px」的判定，实际余量是 0。
+4. **2408 那根柱子是上下双向尖刺**，中间只有 31px 通道，柱子下面封死。
+
+第 2 段只有 **6px 窗口**：早一帧（14）落在 x2481 被弹簧②上方的下垂尖刺挡住，晚一帧（16）飞过弹簧掉进深坑。第 3 段不能数帧，只能实时轮询 `vy` 过零——弹跳周期约 52 帧且稳定。
+
+---
+
+## LLM 规划器
+
+```powershell
+# 模拟桥接（离线，不需要游戏）
+python -m agent.main --mode deepseek --steps 1
+
+# 真实游戏
+$env:DEEPSEEK_API_KEY = '...'
+python -m agent.main --real --mode deepseek --settle --exit-room 6b --success-room 6c --steps 12
+```
+
+可选环境变量：`DEEPSEEK_MODEL`（默认 `deepseek-chat`）、`DEEPSEEK_BASE_URL`（默认 `https://api.deepseek.com`）。也支持 `--mode codex`（复用 ChatGPT 登录，不消耗 API key）和 `--mode gpt`。
+
+规划器收到的不只是坐标，还有逐帧物理参考（`agent/knowledge.py`，从 `kb/speedrun/` 蒸馏、与反编译代码核对过）、平台采样、房间几何、可选 TAS 动作提示，以及已验证技能。
+
+### 防漂移
+
+模型思考时游戏仍在跑，计划很容易过期。三道闸：
+
+- **`--settle`** — 规划前等最多 3 秒到「落地且稳定」的观测。
+- **`--pause-planning`** — 思考时冻结游戏，执行前恢复（需要桥接 0.2.4+）。这是移动平台上 `STALE_PLAN` 的主要解法。
+- **stale-plan guard** — 若计划落地状态、冲刺数或位置与执行时观测不符，直接跳过该计划，一帧输入都不发。
+
+`--success-room` 用来收窄 `--exit-room`：只认前进方向的房间，避免「走回上一个房间也算成功」的假成功。
+
+---
+
+## 技能记忆与候选搜索
+
+Phase 6 的工作流把「回放验证过的落地动作」存成版本化技能，规划时作为提示注入：
+
+```shell
+python -m agent.memory logs/live-landing-6b-lower.json --name lower-ledge \
+  --game-version YOUR_BUILD --memory logs/phase6.sqlite3
+
+python -m agent.live_search --target 2057 -1128 --compare-skills \
+  --game-version YOUR_BUILD --memory logs/phase6.sqlite3 \
+  --radius 18 --frames 12 --depth 2 --budget 21 --settle 45 --min-segments 2 --repeats 3
+```
+
+`live_search` 在 SpeedrunTool 存档槽上做有界束搜索，`--compare-skills` 并行跑「有技能提示」与「纯搜索」两组，输出候选数、命中率和回放验证结果。6b 入口段的实测：普通搜索用了 7 次评估，有技能提示只用 2 次，两组都落在 (2055,-1128) 且通过 3 次独立回放。
+
+技能是**版本绑定**的（`game_version` + 房间 + 落地状态 + 冲刺数），游戏更新后自动失效而不是错用。
+
+---
+
+## TAS 数据训练
+
+```shell
 git clone https://github.com/VampireFlower/CelesteTAS.git data/tas-source
-git -C data/tas-source checkout 49c21de0c9bb9106aba3569df9faf919a0a932f5
 python -m agent.tas_training data/tas-source
-python -m agent.main --real --mode gpt --tas-prior data/tas-training/action-prior.json
+python -m agent.main --real --mode deepseek --tas-prior data/tas-training/action-prior.json
 ```
 
-The trainer writes the dataset, model and holdout report under `data/tas-training`.
-The GPT integration passes optional action hints and filters out dash hints when
-the player has no dash available. The metric measures held-out action prediction.
-Game-state imitation requires synchronized TAS playback and state observations.
+训练器只学「上一个按键组合之后常跟什么组合」，属于动作先验，不是状态模仿。度量的是留出集上的动作预测准确率，**不等于能过关**。
 
-For a local archive without Git metadata, select training and holdout files
-explicitly. The report records the SHA-256 of each selected file. This run
-includes Chapter 6B in training and reserves selected Chapter 7 and 8 routes
-for evaluation:
+> **注意**：`data/` 里那份 `1A-through-6b.tas` 的 `#lvl_6b` 段是**原版 1A** 的（与 `data/tas-source/1A.tas` 对应段逐字节相同），而本机跑的是教学地图——房间名撞了，几何完全不同。回放它会把人从左门带出房间。TAS 数据对当前关卡无效，只能自己解。
 
-```powershell
-$routes = @(1..6 | ForEach-Object {
-    foreach ($side in 'A','B','C') {
-        if ($_ -ne 5 -or $side -ne 'A') { "$_${side}.tas" }
-    }
-})
-python -m agent.tas_training 'E:\pw\CodeX\Celeste-TAS-data\CelesteTAS-master' --output data/tas-training-local --train @routes --holdout 7A.tas 7B.tas 7C.tas 8B.tas 8C.tas
-python -m agent.main --real --mode codex --settle --exit-room 6b --steps 6 --tas-prior data/tas-training-local/action-prior.json
-```
+PICO-8 版 Celeste Classic 用独立的输入格式，单独训练：`python -m agent.classic_training <路径>`。
 
-Start the playtest from the 6b entrance. The prior supplies action suggestions
-to Codex. The holdout score measures button combinations, not room completion.
+---
 
-The PICO-8 Celeste Classic database uses a separate input format and timing.
-Train it separately, holding out the `classic` and `classic2` folders:
+## Phase 7 离线评估
 
-```powershell
-python -m agent.classic_training 'E:\pw\CodeX\Celeste-TAS-data\tasdatabase-master'
-```
-
-The outputs are under `data/tas-training-classic`. Duplicate decoded input
-sequences are removed before training. Keep using the main-game prior for
-Everest 6b: the Classic model scored lower on the same main-game holdout,
-and its frame counts are in the source game's timing.
-
-`CelesteTAS-EverestInterop-master` contains the TAS tooling source. To
-collect state-conditioned examples, add `ExportGameInfo, dump.txt` before
-the gameplay section of a TAS in Celeste Studio, play it in Celeste, and
-convert the exported tab-separated dump:
-
-```powershell
-python -m agent.interop_dataset 'E:\path\to\dump.txt'
-```
-
-The converter writes `data/interop-training/transitions.jsonl`. Each action
-belongs to the later frame because the exporter records state after the
-update. Missing frames and room transitions break the pairing. Keep entire
-recordings separate for training and evaluation.
-
-## Phase 7 offline evaluation
-
-Run the evaluator from the repository root with the Phase 6 training, comparison
-and trajectory logs in `logs/`. Pass `--logs` to use another directory. These
-recordings are local experiment data and are excluded from source control.
-
-```powershell
+```shell
 python -m agent.evaluate
 ```
 
-The report defaults to `logs/phase7-evaluation.json`. The command exits with
-status 1 on a benchmark mismatch or 2 when its input cannot be read.
-To view the report with Celeste closed, use Node.js 22.12 or newer and run:
+从 `logs/` 读取已有的训练、对比、轨迹记录，独立复核房间 6b 的基准是否仍然成立（技能边界、回放轨迹、JSONL 归档一致性），报告默认写到 `logs/phase7-evaluation.json`。基准不符退出码 1，读不到输入退出码 2。
 
-```powershell
+配套的可视化面板：
+
+```shell
 pip install -e ".[dashboard]"
-npm --prefix dashboard ci
-npm --prefix dashboard run build
+npm --prefix dashboard ci && npm --prefix dashboard run build
 python -m uvicorn agent.dashboard:app --host 127.0.0.1 --port 8000
 ```
 
-Open [the local Dashboard](http://127.0.0.1:8000). Set
-`CELESTE_EVALUATION_REPORT` before starting the server to view another exported
-evaluation. The player state and timeline come from recorded samples. Optional
-screenshots, token usage and API costs appear when the source report includes
-them. Candidate retries count additional search trials from the saved start.
+打开 http://127.0.0.1:8000 ，关掉游戏也能看录下来的轨迹回放。`CELESTE_EVALUATION_REPORT` 可指向另一份报告。
 
+---
+
+## 已知限制
+
+诚实地记下来，因为这些都是真实踩到的：
+
+- **LLM 还没自主通关整章。** 单步与三步闭环已验证（计划预测区间准，执行帧数吻合），但 6b/6c 是人类用探针读出几何、手工推出宏、再由 `agent.step` 逐段验证出来的。下一步才是把这些宏交给规划器组合。
+- **`reset_room` 会让游戏崩溃。** 死亡后不能调它：`Level.TransitionRoutine` 里的 `CollideFirst` 会 NRE（撞进 SpeedrunTool 的传送钩子）。现在死亡路径完全依赖自动重生。
+- **TAS 回放跨房会中断**，单次 execution 无法穿越房间边界。
+- **未实现**：音频录制、`SimState` 完整导出（建议复用 SpeedrunTool 存档）、菜单按语言反查对话键。
+- **一次只能有一个执行器**。终端结束时释放按键并交还手动控制；断连、切房、暂停、死亡都会中断执行。`frame` 计的是 `Level.Update` 调用次数，不保证是物理步。
+- **只发布源码**。游戏二进制、日志、存档、凭据都不入库；Python CI 不需要 Celeste，C# 只能在本地对着合法安装的程序集编译。
+
+---
+
+## 目录
+
+```
+agent/          规划器、桥接客户端、探针与测量工具
+  main.py       LLM 闭环（mock/manual/gpt/codex/deepseek）
+  inspect.py    信息层查询 CLI
+  room_map.py   带坐标的房间图
+  step.py       分段执行器（卡时机的主力）
+  sweep.py      候选批量对拍
+  live_search.py 存档槽上的有界束搜索
+  memory.py     版本化技能与 SQLite 轨迹
+  knowledge.py  注入规划提示的物理常数
+bridge/CelesteAgentBridge/   C# Mod（Everest）
+  Module.cs     请求分发、能力上报、帧循环
+  PlayerProbe / WorldProbe / EntityScan / CollisionSnapshot /
+  SolidProbe / TileAtlas / MenuProbe / Capture / ColliderProbe
+data/routes/    已验证的 6b、6c 路线
+docs/           protocols.md（协议）、acceptance.md（验收）、phase4-7-status.md
+kb/             冲刺物理与机制笔记（已与反编译代码核对）
+dashboard/      评估报告可视化
+```
+
+---
+
+## 文档
+
+- `docs/protocols.md` — 协议 1.0、方法表、错误码、信息层 schema
+- `docs/acceptance.md` — 逐项验收清单与实机记录
+- `docs/phase4-7-status.md` — 各阶段实现到哪、哪些只是脚手架
+- `data/routes/6b.md`、`data/routes/6c.md` — 通关路线的完整推导
+
+源码：https://github.com/chisAcn/Celeste-Deepseek
