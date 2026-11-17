@@ -46,6 +46,8 @@ def print_tiles(payload):
 
 async def main(args):
     topics = [t.strip() for t in args.what.split(",") if t.strip()]
+    if "all" in topics:
+        topics = list(TOPICS)
     unknown = [t for t in topics if t not in TOPICS]
     if unknown:
         raise SystemExit(f"unknown topic(s): {', '.join(unknown)}; pick from {', '.join(TOPICS)}")
