@@ -64,3 +64,15 @@ def test_tool_polling():
         with pytest.raises(ValueError):
             await tools.invoke("shell")
     asyncio.run(check())
+
+
+def test_a_protocol_error_keeps_the_stream_in_sync():
+    """An optional probe must not cost the session its connection."""
+    async def check():
+        server = await asyncio.start_server(MockBridge().handle, "127.0.0.1", 0)
+        async with server, BridgeClient(server.sockets[0].getsockname()[1]) as client:
+            with pytest.raises(RuntimeError):
+                await client.call("get_platforms")
+            assert not client.writer.is_closing()
+            assert (await client.call("get_state"))["room"]["name"] == "mock-flat"
+    asyncio.run(check())

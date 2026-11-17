@@ -42,6 +42,14 @@ class ExecutorAgent:
     async def observe(self) -> GameState:
         return GameState.model_validate(await self.client.call("get_state"))
 
+    async def call(self, method: str, **params):
+        """Control-plane passthrough: pause, playability, geometry.
+
+        Input stays inside this class -- ``run`` is the only thing that sends
+        frames, which is what makes "one controller at a time" true.
+        """
+        return await self.client.call(method, **params)
+
     def precondition_reason(self, contract: StepContract, state: GameState) -> str | None:
         pre = contract.pre
         player = state.player

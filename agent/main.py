@@ -1,12 +1,12 @@
 import argparse
 import asyncio
 import json
-import math
 import os
 import uuid
 from pathlib import Path
 
-from agent.agents import ExecutorAgent, StepContract
+from agent.agents import ExecutorAgent, PlannerAgent, StepContract, TeamSession
+from agent.agents.planner import skill_hint
 from agent.client import BridgeClient
 from agent.codex_play import CodexPlanner, CodexPlayError
 from agent.knowledge import MOVEMENT_REFERENCE
@@ -52,25 +52,20 @@ async def deepseek_plan(llm, context) -> Plan:
         raise ValueError("DeepSeek returned a plan that fails the schema.") from error
 
 
-def skill_hint(skill, state):
-    """Compact planner-facing view of a replay-verified room route."""
-    start, end = skill.verified_start, skill.verified_end
-    hint = {
-        "name": skill.name,
-        "frames": skill.frames,
-        "successes": skill.successes,
-        "failures": len(skill.failures),
-        "actions": [action.model_dump() for action in skill.sequence.actions],
-    }
-    if start and start.player:
-        hint["start"] = {"x": start.player.x, "y": start.player.y}
-        if state.player:
-            hint["start_distance"] = round(math.hypot(
-                start.player.x - state.player.x, start.player.y - state.player.y), 1)
-    if end and end.player:
-        hint["end"] = {"x": end.player.x, "y": end.player.y,
-                       "on_ground": end.player.on_ground}
-    return hint
+def open_llm(mode):
+    """The transport a model backend needs, or None for planners that bring their own."""
+    if mode == "deepseek":
+        if not os.environ.get("DEEPSEEK_API_KEY"):
+            raise CodexPlayError("Set DEEPSEEK_API_KEY before using --mode deepseek.")
+        from openai import AsyncOpenAI
+        return AsyncOpenAI(
+            api_key=os.environ["DEEPSEEK_API_KEY"],
+            base_url=os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+            timeout=60, max_retries=0)
+    if mode == "gpt":
+        from openai import AsyncOpenAI
+        return AsyncOpenAI(timeout=30, max_retries=0)
+    return None
 
 
 async def observe_for_plan(registry, settle, exit_room):
@@ -108,22 +103,9 @@ async def run(client, mode, steps=20, action_prior=None, *, settle=False, exit_r
     retries = 0
     registry = ToolRegistry(client)
     executor = ExecutorAgent(client, registry)
-    llm = None
-    codex = None
+    llm = open_llm(mode)
+    codex = CodexPlanner(Plan) if mode == "codex" else None
     previous_action = None
-    if mode == "gpt":
-        from openai import AsyncOpenAI
-        llm = AsyncOpenAI(timeout=30, max_retries=0)
-    elif mode == "deepseek":
-        if not os.environ.get("DEEPSEEK_API_KEY"):
-            raise CodexPlayError("Set DEEPSEEK_API_KEY before using --mode deepseek.")
-        from openai import AsyncOpenAI
-        llm = AsyncOpenAI(
-            api_key=os.environ["DEEPSEEK_API_KEY"],
-            base_url=os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
-            timeout=60, max_retries=0)
-    elif mode == "codex":
-        codex = CodexPlanner(Plan)
     Path("logs").mkdir(exist_ok=True)
     def record(event):
         history.append(event)
@@ -336,6 +318,63 @@ async def run(client, mode, steps=20, action_prior=None, *, settle=False, exit_r
             await llm.close()
 
 
+async def run_collab(client, mode, *, steps=12, skills=None, exit_room=None,
+                     success_room=None, action_prior=None, think_timeout=60.0,
+                     anchor_timeout=8.0, unstable="wait", max_retries=3):
+    """Plan in a separate task while the executor stands by.
+
+    The two agents share only queues, so the model call can take as long as it
+    takes without freezing the room -- the executor sits in standby, watching a
+    still Madeline, and publishes an anchor only when the world allows one.
+    """
+    if mode not in {"codex", "deepseek"}:
+        raise CodexPlayError("--collab needs a model backend (codex or deepseek).")
+    if exit_room:
+        initial = GameState.model_validate(await client.call("get_state"))
+        if initial.room.name != exit_room or initial.player is None or initial.player.dead:
+            raise CodexPlayError(f"Start the trial in playable room {exit_room}.")
+    if unstable == "freeze":
+        if not (await client.call("ping")).get("pause_control"):
+            raise CodexPlayError(
+                "The bridge lacks pause_control; rebuild and reinstall the mod.")
+    llm = open_llm(mode)
+    codex = CodexPlanner(Plan) if mode == "codex" else None
+    try:
+        if codex:
+            await codex.check_login()
+
+        async def plan_fn(context):
+            return await codex.plan(context) if codex else await deepseek_plan(llm, context)
+
+        Path("logs").mkdir(exist_ok=True)
+
+        def record(event):
+            with Path("logs/decisions.jsonl").open("a", encoding="utf-8") as file:
+                file.write(json.dumps(event) + "\n")
+
+        planner = PlannerAgent(plan_fn, skills=skills, exit_room=exit_room,
+                               success_room=success_room, action_prior=action_prior,
+                               timeout=think_timeout)
+        session = TeamSession(
+            ExecutorAgent(client, ToolRegistry(client)), planner,
+            exit_room=exit_room, success_room=success_room, max_steps=steps,
+            max_retries=max_retries, anchor_timeout=anchor_timeout,
+            unstable=unstable, think_budget=think_timeout + 60, record=record)
+        try:
+            verdict = await session.run()
+        finally:
+            try:
+                await client.call("stop")
+            except (OSError, RuntimeError, TimeoutError):
+                pass
+        stats = session.stats.summary()
+        print("session " + json.dumps(stats, ensure_ascii=False))
+        return verdict
+    finally:
+        if llm:
+            await llm.close()
+
+
 async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["mock", "manual", "gpt", "codex", "deepseek"], default="mock")
@@ -350,11 +389,28 @@ async def main():
                         help="SQLite skill memory to inject as replay-verified route hints")
     parser.add_argument("--pause-planning", action="store_true",
                         help="freeze the game while the model plans, resume before execution")
+    parser.add_argument("--collab", action="store_true",
+                        help="plan in a separate task; the executor stands by instead of pausing")
+    parser.add_argument("--think-timeout", type=float, default=60.0,
+                        help="seconds a single model call may take (--collab)")
+    parser.add_argument("--anchor-timeout", type=float, default=8.0,
+                        help="seconds to wait for a still world before giving up on standby")
+    parser.add_argument("--on-unstable", choices=["wait", "freeze"], default="wait",
+                        help="what to do when the world never holds still (--collab): "
+                             "keep standing by, or pause the room while planning")
+    parser.add_argument("--max-retries", type=int, default=3,
+                        help="consecutive steps without a landing before giving up (--collab)")
     args = parser.parse_args()
     if (args.settle or args.exit_room) and args.mode not in {"codex", "deepseek"}:
         parser.error("--settle and --exit-room require --mode codex or --mode deepseek")
     if args.pause_planning and args.mode not in {"codex", "deepseek"}:
         parser.error("--pause-planning requires --mode codex or --mode deepseek")
+    if args.collab and args.mode not in {"codex", "deepseek"}:
+        parser.error("--collab requires --mode codex or --mode deepseek")
+    if args.collab and args.pause_planning:
+        parser.error("--collab replaces --pause-planning; use --on-unstable freeze instead")
+    if args.collab and args.settle:
+        parser.error("--collab always waits for a still landing; drop --settle")
     if args.success_room and not args.exit_room:
         parser.error("--success-room requires --exit-room")
     action_prior = None
@@ -382,11 +438,20 @@ async def main():
         port = server.sockets[0].getsockname()[1]
     try:
         async with BridgeClient(port) as client:
-            steps = args.steps or (3 if args.mode in {"codex", "deepseek"} else 20)
-            print(await run(client, args.mode, steps=steps, action_prior=action_prior,
-                            settle=args.settle, exit_room=args.exit_room,
-                            success_room=args.success_room, skills=skills,
-                            pause_planning=args.pause_planning))
+            if args.collab:
+                plan_steps = args.steps or 12
+                print(await run_collab(
+                    client, args.mode, steps=plan_steps, action_prior=action_prior,
+                    exit_room=args.exit_room, success_room=args.success_room,
+                    skills=skills, think_timeout=args.think_timeout,
+                    anchor_timeout=args.anchor_timeout, unstable=args.on_unstable,
+                    max_retries=args.max_retries))
+            else:
+                steps = args.steps or (3 if args.mode in {"codex", "deepseek"} else 20)
+                print(await run(client, args.mode, steps=steps, action_prior=action_prior,
+                                settle=args.settle, exit_room=args.exit_room,
+                                success_room=args.success_room, skills=skills,
+                                pause_planning=args.pause_planning))
     except CodexPlayError as error:
         parser.exit(1, f"{error}\n")
     finally:

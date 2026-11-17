@@ -90,3 +90,19 @@ The 1A TAS route replay through room 6b passed the room-exit check on
 bridge observed the player alive and grounded in 6c at (2340, -1304),
 frame 460264. This verifies the recorded TAS route through 6b. The Codex
 planner's own full-room trial remains separate.
+
+The two-agent collaboration path (`--collab`) has not been run against a live
+game yet. Its promise is checkable from the decision log without watching the
+screen:
+
+1. Every executed step is preceded by an `ANCHOR` event and followed by a
+   `VERIFY` event carrying the same `anchor` id.
+2. `STALE_PLAN` never appears, and `SESSION.rejected` is zero. A non-zero value
+   means the anchor promise broke and should be treated as a defect, not a
+   retry.
+3. No `FREEZE` event appears in a room with static floors: the game must keep
+   running while the model thinks.
+4. `SUPERSEDED` is the only expected accounting entry, and `SESSION.standby_seconds`
+   stays small for a player standing still.
+5. On a moving platform, the run ends with `NO_ANCHOR` (default) or falls back to
+   `FREEZE` with `--on-unstable freeze`; it must not spin.

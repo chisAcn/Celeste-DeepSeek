@@ -39,6 +39,22 @@ class Precondition(Schema):
                 raise ValueError("band minimum exceeds maximum")
         return self
 
+    @classmethod
+    def from_state(cls, state: GameState, slack: float = 2.0) -> "Precondition":
+        """Pin the contract to one observed state.
+
+        ``slack`` is not a tolerance for a stale plan; it only absorbs the
+        subpixel jitter of a body that is standing still. The anchor protocol
+        keeps the world still, so in practice the drift is zero.
+        """
+        player = state.player
+        if player is None:
+            return cls()
+        return cls(room=state.room.name, on_ground=player.on_ground,
+                   min_dashes=player.dashes,
+                   x=(player.x - slack, player.x + slack),
+                   y=(player.y - slack, player.y + slack))
+
 
 class Success(Schema):
     """What must hold at the end for the step to count as landed."""
@@ -82,21 +98,17 @@ class StepContract(Schema):
 
     @classmethod
     def for_plan(cls, actions: list[FrameAction], expected_x: Band | None = None,
-                 planned: GameState | None = None, slack: int = 30) -> "StepContract":
+                 planned: GameState | None = None, slack: int = 30,
+                 position_slack: float = 4.0) -> "StepContract":
         """Build a contract for a plan that does not carry one.
 
         Every guard the single-loop version applied by hand is reproduced here:
-        the planning state becomes the precondition within 4px, the plan's
-        expected range becomes the success band, and the frame budget gets a
-        slack so only a stuck execution trips it.
+        the planning state becomes the precondition within ``position_slack``,
+        the plan's expected range becomes the success band, and the frame budget
+        gets a slack so only a stuck execution trips it.
         """
-        pre = Precondition()
-        if planned is not None and planned.player is not None:
-            player = planned.player
-            pre = Precondition(room=planned.room.name, on_ground=player.on_ground,
-                               min_dashes=player.dashes,
-                               x=(player.x - 4, player.x + 4),
-                               y=(player.y - 4, player.y + 4))
+        pre = Precondition() if planned is None else Precondition.from_state(
+            planned, position_slack)
         ok = Success()
         if expected_x is not None:
             ok = Success(x=(float(expected_x[0]), float(expected_x[1])))
@@ -156,3 +168,80 @@ def first_action(sequence: ActionSequence, frame: int) -> list[str]:
         if frame < offset:
             return action.buttons
     return []
+
+
+def drift(state: GameState, reference: GameState) -> float:
+    """Largest axis distance between two observations, in pixels."""
+    a, b = state.player, reference.player
+    if a is None or b is None:
+        return float("inf")
+    return max(abs(a.x - b.x), abs(a.y - b.y))
+
+
+class Anchor(Schema):
+    """A snapshot the planner is allowed to plan from.
+
+    The executor publishes one only while the world is provably still, so a plan
+    built on it cannot go stale before it runs -- the state it was reasoned from
+    is the state the first frame will be applied to. ``id`` is what makes the
+    promise checkable: a plan carries the anchor it was built on, and the
+    executor drops any plan whose anchor is no longer the current one.
+
+    Geometry and platform samples ride along so the planner never needs the
+    bridge: that is what lets it sit in its own task and think for as long as it
+    likes without holding anything the executor needs.
+    """
+
+    id: int = Field(ge=1)
+    state: GameState
+    still_for: float = 0.0
+    frozen: bool = False
+    geometry: dict | None = None
+    platforms: dict | None = None
+
+
+class PlannedStep(Schema):
+    """A plan, bound to the anchor it was reasoned from."""
+
+    anchor_id: int = Field(ge=1)
+    actions: list[FrameAction] = Field(min_length=1, max_length=64)
+    contract: StepContract = Field(default_factory=StepContract)
+    goal: str = ""
+    reason: str = ""
+    latency: float = 0.0
+
+    @property
+    def frames(self) -> int:
+        return sum(action.frames for action in self.actions)
+
+
+class PlanFailure(Schema):
+    """The planner could not produce a plan for this anchor."""
+
+    anchor_id: int = Field(ge=1)
+    kind: Literal["exception", "timeout", "invalid"] = "exception"
+    detail: str = ""
+
+
+StepVerdict = Literal[
+    "LANDED",       # settled on the ground inside the success band
+    "MISSED",       # every frame ran, the landing was somewhere else
+    "ABORTED",      # the executor stopped it mid-step
+    "DIED",
+    "INTERRUPTED",
+    "REJECTED",     # the anchor promise was broken; must stay at zero
+]
+
+
+class StepOutcome(Schema):
+    """What the executor tells the planner about a step that just finished.
+
+    ``settled`` is the grounded truth: a step's last input frame usually happens
+    in mid-air, so the plan is judged again once gravity has finished with her.
+    """
+
+    verdict: StepVerdict
+    report: StepReport | None = None
+    actions: list[FrameAction] = Field(default_factory=list)
+    settled: GameState | None = None
+    detail: str | None = None

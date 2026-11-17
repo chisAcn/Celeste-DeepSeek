@@ -26,14 +26,22 @@ class BridgeClient:
                 self.writer.write((req.model_dump_json() + "\n").encode())
                 await asyncio.wait_for(self.writer.drain(), self.timeout)
                 raw = await asyncio.wait_for(self.reader.readline(), self.timeout)
-                if not raw:
-                    raise ConnectionError("bridge disconnected; execution outcome unknown")
-                response = json.loads(raw)
-                if response.get("id") != req.id or response.get("protocol_version") != "1.0":
-                    raise ValueError("invalid response envelope")
-                if "error" in response:
-                    raise RuntimeError(response["error"])
-                return response["result"]
             except BaseException:
-                self.writer.close()  # no ambiguous retries or stale responses
+                self.writer.close()  # ambiguous: the request may still be running
                 raise
+            if not raw:
+                self.writer.close()
+                raise ConnectionError("bridge disconnected; execution outcome unknown")
+            try:
+                response = json.loads(raw)
+            except ValueError:
+                self.writer.close()
+                raise
+            if response.get("id") != req.id or response.get("protocol_version") != "1.0":
+                self.writer.close()  # a mismatched answer cannot be trusted
+                raise ValueError("invalid response envelope")
+            if "error" in response:
+                # A well-formed error reply means the stream is still in sync, so
+                # an optional probe like get_platforms must not kill the session.
+                raise RuntimeError(response["error"])
+            return response["result"]

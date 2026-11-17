@@ -197,12 +197,36 @@ python -m agent.main --real --mode deepseek --settle --exit-room 6b --success-ro
 
 规划器收到的不只是坐标，还有逐帧物理参考（`agent/knowledge.py`，从 `kb/speedrun/` 蒸馏、与反编译代码核对过）、平台采样、房间几何、可选 TAS 动作提示，以及已验证技能。
 
-### 防漂移
+### 双 Agent 协同（`--collab`）
 
-模型思考时游戏仍在跑，计划很容易过期。三道闸：
+单循环版本的三道闸（`--settle` / `--pause-planning` / stale 前置）都是同一个循环里的手工补救：模型思考期间世界照跑，规划用的快照注定追不上，只能靠冻结或事后拒绝兜底。`--collab` 换成另一种承诺：**只在世界确实静止时才让规划器看世界**。
+
+- 执行器独占桥接；规划器是独立 task，只收数据（状态、房间几何、平台采样、上一步结局），拿不到 client，也不需要等锁。
+- 只有**着地且连续两次采样都没位移**（`still_for`，默认 0.15 s）才发布锚点。空中是 `SETTLING`，死亡/失控是 `BLOCKED`，两者都不发布。
+- 计划绑定它据以推理的锚点 id。计划到达时若锚点已不是当前锚点，**一帧不发直接丢弃**——不是"发出去再拒绝"，而是根本没发生过。
+- 待命期间**不按键、不暂停**。`stop` 之后 mod 已经把输入交还，静止的 Madeline 本身就是"世界不动"。这就是落地不再冻结游戏的原因：等待期间游戏照常运行，只是没人按键。
+
+| 事件 | 含义 |
+| --- | --- |
+| `ANCHOR` | 发布锚点，附 `still_for` |
+| `SUPERSEDED` | 计划绑定的锚点已过期，丢弃 |
+| `ANCHOR_LOST` | 等计划期间世界动了（平台带走 / 冰面 / 有人按键），重新锚定 |
+| `STALE_PLAN` | 不该出现：锚点承诺被打破，执行器拒绝了已发出的计划 |
+| `FREEZE` | 世界迟迟不静止，退化为暂停（仅 `--on-unstable freeze`） |
+| `SESSION` | 收尾统计，`rejected` 就是 STALE_PLAN 计数，目标是 0 |
+
+```powershell
+python -m agent.main --real --mode deepseek --collab --exit-room 6b --success-room 6c --steps 12
+```
+
+世界一直不静止（比如站在移动平台上）时两种处理：`--on-unstable wait`（默认，等满 `--anchor-timeout` 秒后放弃，全程不冻结）或 `--on-unstable freeze`（退化成暂停一次模型调用，给移动平台房间用，代价是那几秒画面是冻的）。`--think-timeout` 约束单次模型调用，`--max-retries` 约束连续未落地次数。
+
+单循环路径（不带 `--collab`）保留原有的 `--settle`、`--pause-planning` 和 stale 前置；`--collab` 与 `--pause-planning` 互斥。
+
+### 单循环路径的防漂移
 
 - **`--settle`** — 规划前等最多 3 秒到「落地且稳定」的观测。
-- **`--pause-planning`** — 思考时冻结游戏，执行前恢复（需要桥接 0.2.4+）。这是移动平台上 `STALE_PLAN` 的主要解法。
+- **`--pause-planning`** — 思考时冻结游戏，执行前恢复（需要桥接 0.2.4+）。
 - **stale-plan guard** — 若计划落地状态、冲刺数或位置与执行时观测不符，直接跳过该计划，一帧输入都不发。
 
 `--success-room` 用来收窄 `--exit-room`：只认前进方向的房间，避免「走回上一个房间也算成功」的假成功。
@@ -220,6 +244,8 @@ python -m agent.main --real --mode deepseek --settle --exit-room 6b --success-ro
 | `DIED` | 死亡 | 等自动重生（**不 `reset_room`**，会崩） |
 
 `ABORTED` 与 `UNSATISFIED` 的区别是整个拆分的意义所在：前者说明世界在计划执行期间变了，后者说明计划本身判断错了，两者需要完全不同的下一个计划。
+
+在 `--collab` 下 `REJECTED` 应该是**结构上不可能**的：锚点承诺保证计划据以推理的状态就是第一条输入落到的状态，而锚点在发送前还会再核一次。它一旦出现，说明承诺本身破了，日志会把它当作缺陷记成 `STALE_PLAN` 并计入 `SESSION.rejected`——目标值是 0。
 
 执行是实时的（每 `Level.Update` 应用一次输入），所以中止能做到帧级——不必把动作切段，切段会在间隙松开按键，毁掉跳跃弧线。
 
