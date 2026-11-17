@@ -31,6 +31,13 @@ class MockBridge:
             return {"playable": not self.paused, "frame": self.state.frame}
         if method == "get_state":
             return self.state.model_dump()
+        if method == "get_room_info":
+            return {
+                "room": self.state.room.name, "frame": self.state.frame,
+                "bounds": {"x": 0, "y": 0, "width": 320, "height": 184},
+                "exits": [{"side": "right", "target": "mock-next",
+                           "axis": "y", "from": 0, "to": 184}],
+            }
         if method == "reset_room":
             self.state = GameState(frame=self.state.frame)
             self.held.clear()

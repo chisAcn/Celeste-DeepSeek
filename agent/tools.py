@@ -25,6 +25,10 @@ class ToolRegistry:
     async def observe(self):
         return await self.client.call("get_state")
 
+    async def room_info(self):
+        """Room bounds plus every boundary segment that leads to another room."""
+        return await self.client.call("get_room_info")
+
     async def reset(self):
         return await self.client.call("reset_room")
 

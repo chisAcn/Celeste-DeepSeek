@@ -220,6 +220,22 @@ async def run(client, mode, steps=20, action_prior=None, *, settle=False, exit_r
                         )
                     if exit_room and platform_telemetry:
                         context["platforms"] = await client.call("get_platforms")
+                    if exit_room:
+                        try:
+                            geometry = await client.call("get_room_info")
+                        except Exception:
+                            geometry = {}
+                        if geometry.get("exits"):
+                            context["room_geometry"] = geometry
+                            context["room_geometry_guidance"] = (
+                                "room_geometry.bounds is the current room rectangle and "
+                                "room_geometry.exits lists boundary segments that open into a "
+                                "neighbouring room. Each segment gives the side, the target room "
+                                "and the axis range (from..to) of the doorway, measured in world "
+                                "coordinates. Route the player through one of those doorway "
+                                "ranges; a segment without a doorway on the target side does not "
+                                "lead out."
+                            )
                     if action_prior is not None:
                         context["tas_action_hints"] = [
                             hint.model_dump()

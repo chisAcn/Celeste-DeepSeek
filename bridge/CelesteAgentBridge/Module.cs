@@ -1,5 +1,6 @@
 using Celeste;
 using Celeste.Mod;
+using Microsoft.Xna.Framework;
 using Monocle;
 using MonoMod.ModInterop;
 using System.Collections.Concurrent;
@@ -105,6 +106,9 @@ public sealed class Module : EverestModule {
             case "get_platforms":
                 if (Engine.Scene is not Level platformLevel) throw new ArgumentException("no active room");
                 return ObservePlatforms(platformLevel);
+            case "get_room_info":
+                if (Engine.Scene is not Level infoLevel) throw new ArgumentException("no active room");
+                return RoomInfo(infoLevel);
             case "save_state":
             case "load_state":
             case "clear_state":
@@ -233,6 +237,46 @@ public sealed class Module : EverestModule {
         result["frame"] = frame;
         result["room"] = level.Session.Level;
         return result;
+    }
+    // Room geometry plus every boundary segment that leads into a neighbouring room.
+    JsonObject RoomInfo(Level level) {
+        var bounds = level.Bounds;
+        var map = level.Session.MapData;
+        var exits = new JsonArray();
+        void Scan(string side, bool vertical) {
+            int start = vertical ? bounds.Top : bounds.Left;
+            int end = vertical ? bounds.Bottom : bounds.Right;
+            string? current = null;
+            int segmentStart = start, last = start;
+            void Flush() {
+                if (current == null) return;
+                exits.Add(new JsonObject {
+                    ["side"]=side, ["target"]=current, ["axis"]=vertical ? "y" : "x",
+                    ["from"]=segmentStart, ["to"]=last
+                });
+            }
+            for (int t = start; t <= end; t += 8) {
+                Vector2 probe = side switch {
+                    "left" => new Vector2(bounds.Left - 6, t),
+                    "right" => new Vector2(bounds.Right + 6, t),
+                    "up" => new Vector2(t, bounds.Top - 6),
+                    _ => new Vector2(t, bounds.Bottom + 6),
+                };
+                var at = map.GetAt(probe);
+                bool open = at != null && at.Name != level.Session.Level && !level.CollideCheck<Solid>(probe);
+                string? key = open ? at!.Name : null;
+                if (key != current) { Flush(); current = key; segmentStart = t; }
+                last = t;
+            }
+            Flush();
+        }
+        Scan("left", true); Scan("right", true); Scan("up", false); Scan("down", false);
+        return new JsonObject {
+            ["room"]=level.Session.Level, ["frame"]=frame,
+            ["bounds"]=new JsonObject {
+                ["x"]=bounds.X, ["y"]=bounds.Y, ["width"]=bounds.Width, ["height"]=bounds.Height },
+            ["exits"]=exits
+        };
     }
     void Finish(string status) {
         if(active is not {} job) return;
