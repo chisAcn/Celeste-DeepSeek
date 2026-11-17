@@ -1,0 +1,143 @@
+import asyncio
+import json
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+from pydantic import ValidationError
+
+from agent.client import BridgeClient
+from agent.codex_play import CodexPlanner, CodexPlayError
+from agent.main import run
+from agent.mock import MockBridge
+from agent.protocol import ActionSequence, FrameAction, GameState, Request
+
+
+def test_roundtrip():
+    assert GameState.model_validate_json(GameState().model_dump_json()) == GameState()
+
+
+@pytest.mark.parametrize("frames", [0, -1, 121, True])
+def test_limits(frames):
+    with pytest.raises(ValidationError):
+        FrameAction(buttons=[], frames=frames)
+
+
+def test_sequence_limit():
+    with pytest.raises(ValidationError):
+        ActionSequence(execution_id="x", actions=[FrameAction(buttons=[], frames=120)] * 6)
+
+
+def test_duplicate_release():
+    mock = MockBridge()
+    req = Request(id="1", method="execute_frames", params={"execution_id": "a",
+                  "actions": [{"buttons": ["right", "jump"], "frames": 10}]})
+    result = mock.dispatch(req)
+    assert result["executed_frames"] == 10
+    assert not mock.held
+    with pytest.raises(ValueError):
+        mock.dispatch(req)
+
+
+def test_e2e():
+    async def scenario():
+        server = await asyncio.start_server(MockBridge().handle, "127.0.0.1", 0)
+        async with server, BridgeClient(server.sockets[0].getsockname()[1]) as client:
+            assert await run(client, "mock") == "SUCCESS"
+    asyncio.run(scenario())
+
+
+def test_deepseek_requires_api_key(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+
+    async def scenario():
+        mock = MockBridge()
+        server = await asyncio.start_server(mock.handle, "127.0.0.1", 0)
+        async with server, BridgeClient(server.sockets[0].getsockname()[1]) as client:
+            with pytest.raises(CodexPlayError, match="DEEPSEEK_API_KEY"):
+                await run(client, "deepseek", steps=1)
+
+    asyncio.run(scenario())
+
+
+def test_deepseek_playtest(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "fixture")
+    captured = {}
+
+    async def create(**kwargs):
+        captured["request"] = kwargs
+        content = json.dumps({
+            "goal": "move right", "reason": "flat fixture",
+            "actions": [{"buttons": ["right"], "frames": 30}],
+            "expected_x_min": 1, "expected_x_max": 100,
+        })
+        return SimpleNamespace(choices=[SimpleNamespace(
+            message=SimpleNamespace(content=content))])
+
+    async def close():
+        pass
+
+    def client_factory(**kwargs):
+        captured["client"] = kwargs
+        return SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=create)),
+            close=close)
+
+    monkeypatch.setitem(sys.modules, "openai",
+                        SimpleNamespace(AsyncOpenAI=client_factory))
+
+    async def scenario():
+        mock = MockBridge()
+        server = await asyncio.start_server(mock.handle, "127.0.0.1", 0)
+        async with server, BridgeClient(server.sockets[0].getsockname()[1]) as client:
+            assert await run(client, "deepseek", steps=1) == "STOPPED"
+            assert not mock.held
+
+    asyncio.run(scenario())
+    assert captured["client"]["base_url"] == "https://api.deepseek.com"
+    assert captured["client"]["api_key"] == "fixture"
+    request = captured["request"]
+    assert request["model"] == "deepseek-chat"
+    assert request["response_format"] == {"type": "json_object"}
+    assert '"mock-flat"' in request["messages"][1]["content"]
+    event = json.loads(Path("logs/decisions.jsonl").read_text(encoding="utf-8"))
+    assert event["result"]["executed_frames"] == 30
+
+
+@pytest.mark.parametrize("frames", [30, 121])
+def test_codex_playtest(monkeypatch, tmp_path, frames):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("agent.codex_play.shutil.which", lambda _: "codex")
+
+    async def fake_call(self, args, **kwargs):
+        if args == ["login", "status"]:
+            return 0, b"Logged in using ChatGPT"
+        assert '"mock-flat"' in kwargs["prompt"]
+        output = Path(args[args.index("--output-last-message") + 1])
+        output.write_text(json.dumps({
+            "goal": "move right", "reason": "flat fixture",
+            "actions": [{"buttons": ["right"], "frames": frames}],
+            "expected_x_min": 1, "expected_x_max": 100,
+        }), encoding="utf-8")
+        return 0, b""
+
+    monkeypatch.setattr(CodexPlanner, "_call", fake_call)
+
+    async def scenario():
+        mock = MockBridge()
+        server = await asyncio.start_server(mock.handle, "127.0.0.1", 0)
+        async with server, BridgeClient(server.sockets[0].getsockname()[1]) as client:
+            if frames > 120:
+                with pytest.raises(CodexPlayError, match="valid action plan"):
+                    await run(client, "codex", steps=1)
+                assert not Path("logs/decisions.jsonl").exists()
+            else:
+                assert await run(client, "codex", steps=1) == "STOPPED"
+                event = json.loads(Path("logs/decisions.jsonl").read_text(encoding="utf-8"))
+                assert event["result"]["executed_frames"] == frames
+            assert not mock.held
+
+    asyncio.run(scenario())

@@ -1,0 +1,16 @@
+.venv/
+.deps/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+.env
+bin/
+obj/
+*.dll
+*.pdb
+logs/
+data/
+dashboard/node_modules/
+dashboard/dist/
+.workbuddy/

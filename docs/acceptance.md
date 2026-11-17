@@ -1,0 +1,92 @@
+# Acceptance checklist
+
+Compilation is not proof of successful game control.
+
+1. Launch Everest and verify CelesteAgentBridge loads, localhost:32123 responds to ping.
+2. Observe player coordinates/speed while manually moving. Missing player must be null.
+3. Run ten right frames three times from the same manually established starting point; record before/after and deviations.
+4. Verify right+jump, diagonal dash, grab, empty-button release and consecutive held jump semantics.
+5. Disconnect during a long action; verify release. Test stop from another client.
+6. Test pause, death, respawn, room transitions and leaving gameplay.
+7. Check reset_room reloads the current room (not a snapshot restore).
+8. Run a bounded model trial using either `--mode codex` with ChatGPT login or `--mode gpt` with API credentials. Inspect `logs/decisions.jsonl`.
+
+Still unverified: live Mod loading/input timing, grab-setting interactions, real room completion and GPT API trial. The local protocol assumes trusted clients. Error codes are coarse. No screenshot/geometry observation yet. Updates continue while GPT thinks; no deterministic replay claim.
+
+Verified 2026-11-15: real bridge loaded; ping/state succeeded; idle sequence executed 1 frame; right sequence executed 10 frames, x 58 -> 70, vx 0 -> 90. Python CI passed (12 tests). Remaining checklist items still pending.
+
+See live-validation-2026-11-15.md: jump, climb, natural death/respawn and room transitions now observed successfully. Dash tutorial is blocked by frozen-level eligibility. This supersedes the earlier pending status for those four tested cases.
+
+On 2026-11-16, `python -m agent.main --real --mode codex --steps 1` passed the
+single-action closed loop in room 6b on Everest bridge 0.2.3. Codex planned
+15 frames of right+jump and the bridge reported exactly 15 completed frames.
+The player moved from (2016, -1128) to (2037, -1153), within the predicted
+x range of 2035–2065. The decision log recorded `verified: true` under
+execution ID `987dbe84-8b09-426d-b778-e01dae776b70`. The trial returned
+`STOPPED` at the one-step limit with the room still incomplete. The direct
+API mode and room completion remain unverified.
+
+On 2026-11-16, a three-step Codex trial after resetting room 6b to its entrance
+at (2016, -1128) reached x=2091 at the final execution boundary. All three
+sequences completed and all three final x values passed their predicted ranges.
+
+| Step | Input | Executed frames | Start x | End x | Predicted x |
+| --- | --- | ---: | ---: | ---: | --- |
+| 1 | Right + jump | 18 | 2016 | 2042 | 2016–2046 |
+| 2 | Right | 12 | 2047 | 2062 | 2056–2063 |
+| 3 | Right + jump | 18 | 2065 | 2091 | 2087–2095 |
+
+The run returned `STOPPED` at its three-step limit. The game kept updating
+while Codex planned: the second plan referred to the jump's descent, but its
+execution started on the ground. The decision log records execution boundary
+states, so it does not independently confirm the exact observation sent to
+the model. No action stalled or missed its predicted x range in this trial,
+so recovery from prediction errors and full room completion remain unverified.
+The three entries in `logs/decisions.jsonl` start at execution frame 122715.
+
+On 2026-11-16, the stale-plan guard passed a controlled timing trial on the
+real 6b bridge. The test substituted two fixed planner replies to make the
+first response arrive after landing. The first plan observed the player in
+the air at frame 144005. At frame 144026 the player was grounded, so the
+guard logged `STALE_PLAN` with `ground_state_changed` and skipped execution.
+The next plan used the grounded observation at frame 144027 and completed
+12 right frames, moving x from 2016 to 2031 with `verified: true`.
+Both planning and pre-execution observations appear in the decision log.
+Rejected plans consume the existing step budget. The test exercised real
+physics and bridge inputs with controlled planner responses.
+
+The 2026-11-16 repeat used three real Codex replies on the live 6b bridge.
+Plan 1 observed the player airborne at frame 149168 and was rejected after
+landing at frame 156351. Plan 2 used grounded frame 156352, completed all
+12 right+jump frames, and reached x=2033 from x=2016 within its predicted
+range of 2025–2035. Plan 3 again observed the player airborne and was rejected
+after landing. Both rejections logged `ground_state_changed` and issued no
+inputs. The run returned `STOPPED` after consuming its three-step budget.
+The last observed grounded position was (2038, -1128), with 6b incomplete.
+
+The 6b full-room trial on 2026-11-16 did not pass. An initial unassisted
+Codex route reached x=2081 in the air and stopped when the player temporarily
+disappeared. The retry waited for respawn and gave real Codex the previously
+verified 120-frame entrance route as an advisory hint. Across six plans,
+that route landed on the first ZipMover twice. A jump toward the next
+ZipMover was interrupted by death at x=2171, followed by a confirmed
+respawn. Two plans were blocked because the platform carried the player
+beyond the permitted position drift while Codex planned. The final plan
+executed 24 idle frames to ride the platform. The bridge reported a live
+player at (2158, -1152), still in 6b with `completed: false`, after the
+budget ended. The decision log entries start at planning frame 177117.
+
+The local TAS action prior was then tested with real Codex from the 6b
+entrance and a six-plan limit. The run ended `FAILED` after four executed
+plans. Their action-end x coordinates were 2092, 2089, 2083 and 2106, but
+each settled observation returned to (2016, -1128). The first and fourth
+passed their immediate x-range checks without confirming a landing.
+The bridge still reported room 6b incomplete at frame 313518. No verified
+room-specific route was supplied in this run, so this does not isolate
+the effect of the action prior from the earlier route-assisted trial.
+
+The 1A TAS route replay through room 6b passed the room-exit check on
+2026-11-16. After loading `data/1A-through-6b.tas` in Celeste Studio, the live
+bridge observed the player alive and grounded in 6c at (2340, -1304),
+frame 460264. This verifies the recorded TAS route through 6b. The Codex
+planner's own full-room trial remains separate.

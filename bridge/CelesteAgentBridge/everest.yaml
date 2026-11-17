@@ -1,0 +1,11 @@
+- Name: CelesteAgentBridge
+  Version: 0.2.3
+  DLL: CelesteAgentBridge.dll
+  Dependencies:
+    - Name: Everest
+      Version: 1.0.0
+  OptionalDependencies:
+    - Name: CelesteTAS
+      Version: 3.47.1
+    - Name: SpeedrunTool
+      Version: 3.29.2
