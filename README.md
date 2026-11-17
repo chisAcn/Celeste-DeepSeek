@@ -65,23 +65,6 @@ dotnet build bridge/CelesteAgentBridge -c Release -p:CelesteDir=$env:CELESTE_DIR
 
 > .NET 程序集只在进程启动时加载一次，退回主菜单不算。改完 Mod 不重启，游戏里跑的还是旧版本。
 
-### 连通性自检
-
-```python
-import asyncio, json
-from agent.client import BridgeClient
-
-async def main():
-    async with BridgeClient(timeout=15) as c:
-        print(json.dumps(await c.call("ping"), ensure_ascii=False))
-
-asyncio.run(main())
-```
-
-返回里 `mod_version` 应当等于 `everest.yaml` 的版本号。这是判断「新代码到底加载了没有」最快的方法。
-
----
-
 ## 信息层
 
 桥接的价值一半在读。以下探针全部只读，游戏运行中可随时调用：
@@ -226,19 +209,6 @@ python -m agent.main --real --mode deepseek --settle --exit-room 6b --success-ro
 
 ---
 
-## 技能记忆与候选搜索
-
-Phase 6 的工作流把「回放验证过的落地动作」存成版本化技能，规划时作为提示注入：
-
-```shell
-python -m agent.memory logs/live-landing-6b-lower.json --name lower-ledge \
-  --game-version YOUR_BUILD --memory logs/phase6.sqlite3
-
-python -m agent.live_search --target 2057 -1128 --compare-skills \
-  --game-version YOUR_BUILD --memory logs/phase6.sqlite3 \
-  --radius 18 --frames 12 --depth 2 --budget 21 --settle 45 --min-segments 2 --repeats 3
-```
-
 `live_search` 在 SpeedrunTool 存档槽上做有界束搜索，`--compare-skills` 并行跑「有技能提示」与「纯搜索」两组，输出候选数、命中率和回放验证结果。6b 入口段的实测：普通搜索用了 7 次评估，有技能提示只用 2 次，两组都落在 (2055,-1128) 且通过 3 次独立回放。
 
 技能是**版本绑定**的（`game_version` + 房间 + 落地状态 + 冲刺数），游戏更新后自动失效而不是错用。
@@ -261,26 +231,6 @@ PICO-8 版 Celeste Classic 用独立的输入格式，单独训练：`python -m 
 
 ---
 
-## Phase 7 离线评估
-
-```shell
-python -m agent.evaluate
-```
-
-从 `logs/` 读取已有的训练、对比、轨迹记录，独立复核房间 6b 的基准是否仍然成立（技能边界、回放轨迹、JSONL 归档一致性），报告默认写到 `logs/phase7-evaluation.json`。基准不符退出码 1，读不到输入退出码 2。
-
-配套的可视化面板：
-
-```shell
-pip install -e ".[dashboard]"
-npm --prefix dashboard ci && npm --prefix dashboard run build
-python -m uvicorn agent.dashboard:app --host 127.0.0.1 --port 8000
-```
-
-打开 http://127.0.0.1:8000 ，关掉游戏也能看录下来的轨迹回放。`CELESTE_EVALUATION_REPORT` 可指向另一份报告。
-
----
-
 ## 已知限制
 
 诚实地记下来，因为这些都是真实踩到的：
@@ -294,29 +244,6 @@ python -m uvicorn agent.dashboard:app --host 127.0.0.1 --port 8000
 
 ---
 
-## 目录
-
-```
-agent/          规划器、桥接客户端、探针与测量工具
-  main.py       LLM 闭环（mock/manual/gpt/codex/deepseek）
-  inspect.py    信息层查询 CLI
-  room_map.py   带坐标的房间图
-  step.py       分段执行器（卡时机的主力）
-  sweep.py      候选批量对拍
-  live_search.py 存档槽上的有界束搜索
-  memory.py     版本化技能与 SQLite 轨迹
-  knowledge.py  注入规划提示的物理常数
-bridge/CelesteAgentBridge/   C# Mod（Everest）
-  Module.cs     请求分发、能力上报、帧循环
-  PlayerProbe / WorldProbe / EntityScan / CollisionSnapshot /
-  SolidProbe / TileAtlas / MenuProbe / Capture / ColliderProbe
-data/routes/    已验证的 6b、6c 路线
-docs/           protocols.md（协议）、acceptance.md（验收）、phase4-7-status.md
-kb/             冲刺物理与机制笔记（已与反编译代码核对）
-dashboard/      评估报告可视化
-```
-
----
 
 ## 文档
 
