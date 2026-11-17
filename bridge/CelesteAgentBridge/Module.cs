@@ -237,7 +237,7 @@ public sealed class Module : EverestModule {
                 var before = Observe(level);
                 if (tracePlatforms) before["platform_sample"] = PlatformObserver.Capture(level);
                 active = new Job { Id=id, Actions=(JsonArray)actions.DeepClone(), Before=before, Room=level.Session.Level, Owner=owner, Checkpoints=trace ? new JsonArray() : null, TracePlatforms=tracePlatforms };
-                executions[id] = new JsonObject { ["execution_id"]=id, ["status"]="running" };
+                executions[id] = new JsonObject { ["execution_id"]=id, ["status"]="running", ["executed_frames"]=0 };
                 return executions[id].DeepClone();
             default: throw new ArgumentException("unknown method");
         }
@@ -276,6 +276,9 @@ public sealed class Module : EverestModule {
         Trajectory.Record(level, level.Tracker.GetEntity<Player>(), frame);
         if(job != null && active == job) {
             job.Count++; job.Remaining--;
+            // A supervisor aborting on a frame budget needs the count while the
+            // job still runs; Finish alone would only tell it afterwards.
+            if(executions.TryGetValue(job.Id, out var record)) record["executed_frames"]=job.Count;
             if (job.Checkpoints != null) {
                 var checkpoint = snapshot.DeepClone();
                 if (job.TracePlatforms) checkpoint["platform_sample"] = PlatformObserver.Capture(level);

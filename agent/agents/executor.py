@@ -106,17 +106,21 @@ class ExecutorAgent:
         return TraceRow(frame=frames, x=player.x, y=player.y, vx=player.vx,
                         vy=player.vy, on_ground=player.on_ground, dashes=player.dashes)
 
-    def _live_frames(self, base: int, state: GameState, reported: int) -> int:
+    def _live_frames(self, base: int, state: GameState, reported: int | None) -> int:
         """How many frames of this step have been applied so far.
 
-        The running record on the bridge carries no frame count -- it is only
-        written when the job finishes -- so the room's frame counter is the
-        clock: it advances once per ``Level.Update``, the same tick that applies
-        one input set. Taking the larger of the two keeps the count honest
-        whichever side is ahead.
+        The count has two possible sources. Bridge 0.3.3 writes
+        ``executed_frames`` into the running record on every tick, which is
+        exact and preferred. Older bridges only write it when the job finishes,
+        so the key is missing while it runs; there the room frame counter is the
+        clock, because it advances on the same ``Level.Update`` that applies one
+        input set -- at the cost of the frame that may elapse between the start
+        observation and the request being picked up.
         """
+        if reported is not None:
+            return int(reported)
         derived = state.frame - base if state.frame and base else 0
-        return max(reported, derived, 0)
+        return max(derived, 0)
 
     def _sample(self, sequence: ActionSequence, trace: list[TraceRow], state: GameState,
                 frames: int, still_since: int,
@@ -174,8 +178,7 @@ class ExecutorAgent:
                 state = await self.observe()
                 status = await self.client.call(
                     "get_execution", execution_id=sequence.execution_id)
-                frames = self._live_frames(
-                    base, state, int(status.get("executed_frames") or 0))
+                frames = self._live_frames(base, state, status.get("executed_frames"))
                 stall, still_since, last = self._sample(
                     sequence, trace, state, frames, still_since, last)
                 if status.get("status") != "running":

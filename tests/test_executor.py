@@ -238,3 +238,30 @@ def test_a_blind_frame_counter_still_notices_a_stall():
 
     assert report.status == "ABORTED"
     assert report.reason == "stalled"
+
+
+class ClockAhead(Scripted):
+    """Bridge 0.3.3: the running record carries the count, but the room clock
+    may have raced ahead of the job (other scenes, skipped frames)."""
+
+    def __init__(self, states):
+        super().__init__(states, finish_at=10 ** 6)
+        self.clock = 0
+
+    async def call(self, method, **params):
+        if method == "get_state":
+            self.calls.append((method, params))
+            self.clock += 10
+            data = self.states[0].model_dump()
+            data["frame"] = self.clock
+            return data
+        return await super().call(method, **params)
+
+
+def test_a_reported_count_wins_over_the_room_clock():
+    bridge = ClockAhead([state(x=30.0, vx=60.0)])
+    contract = StepContract(ok=Success(x=(0.0, 400.0)), abort=Abort(timeout_frames=5))
+    report = run(bridge, contract, sequence((["right"], 30)))
+
+    assert report.status == "ABORTED"
+    assert report.at_frame == 5

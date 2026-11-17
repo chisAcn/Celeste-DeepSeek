@@ -111,9 +111,16 @@ returns no `executed_frames` while a job is running -- the field is written only
 by `Finish` -- so a watchdog reading it saw zero forever and neither
 `timeout_frames` nor `stall_frames` could ever trip. The executor now derives
 the count from the room frame counter (`state.frame - start.frame`), which
-advances on the same `Level.Update` that applies one input set, and takes the
-larger of the two sources. `tests/test_executor.py::FrameOnly` reproduces the
-bridge's shape.
+advances on the same `Level.Update` that applies one input set.
+`tests/test_executor.py::FrameOnly` reproduces the bridge's shape.
+
+Bridge 0.3.3 closes the hole at the source instead: the running record carries
+`executed_frames` and is rewritten on every tick, so the count is exact and the
+room clock becomes a fallback for older bridges. The client prefers the reported
+value whenever the key exists (`tests/test_executor.py::ClockAhead` pins that
+precedence). The DLL was built and installed on 2026-11-17 but not yet loaded --
+Celeste was closed at the time, and assemblies load only at process start.
+Expect `ping` to report `mod_version` 0.3.3 before trusting this path.
 
 Collaboration path, four steps with a 1.2s scripted planner:
 

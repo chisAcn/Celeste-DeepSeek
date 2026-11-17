@@ -28,10 +28,11 @@
 
 | 项目 | 状态 |
 | --- | --- |
-| 桥接 Mod | `0.3.2`，实机加载，信息层 9 类探针全部通过 |
+| 桥接 Mod | `0.3.3`，实机加载，信息层 9 类探针全部通过 |
 | 已通关房间 | 6b（→6c）、6c（→7），路线已固化为可复现宏 |
 | LLM 闭环 | 已验证「规划→校验→执行→观测」单步与三步闭环（Codex 模式，落点均命中预测区间） |
-| 测试 | `31 passed`，ruff clean |
+| 双 Agent 协同 | `--collab` 实机验证：4 步零暂停、`rejected=0`；不稳定世界两条分支均按预期收敛 |
+| 测试 | `67 passed`，ruff clean |
 | 未完成 | LLM 尚未自主通关整章；6b/6c 的路线是人机协作推出的宏，不是模型自己想的 |
 
 **6b 通关**：房间 `Celeste/1-ForsakenCity`，终点 `6c` (2332,-1304)
@@ -251,7 +252,7 @@ python -m agent.main --real --mode deepseek --collab --exit-room 6b --success-ro
 
 实测（桥接 0.3.2，房间 7）：`right:60` + `timeout_frames=8` 在 0.187 秒内停在 `at_frame=8`，但报告里 `executed_frames=9`。多出来的一帧是停止请求本身——它要等下一个 `Engine.Update` 才被取出，所以中止帧之后总有一帧会落地。判据写成 `executed = at + 1`，不要指望零开销的瞬时刹车。
 
-同一轮实测还暴露了一个桩测试测不出的坑：`get_execution` 在任务运行期间**不报** `executed_frames`（该字段由 `Finish` 写入），看门狗若读它就会永远看到 0，超时与停滞条款全成死条款。执行器改为用房间帧计数推算（`get_state().frame - 起始帧`），它恰好在施加一帧输入的那个 `Level.Update` 上加一。
+同一轮实测还暴露了一个桩测试测不出的坑：`get_execution` 在任务运行期间**不报** `executed_frames`（该字段由 `Finish` 写入），看门狗若读它就会永远看到 0，超时与停滞条款全成死条款。执行器改为用房间帧计数推算（`get_state().frame - 起始帧`），它恰好在施加一帧输入的那个 `Level.Update` 上加一。桥接 0.3.3 起改为每帧回写 `executed_frames`，客户端优先用这个自报值，房间时钟只作为旧版桥接的兜底。
 
 ---
 
