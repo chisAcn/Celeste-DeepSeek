@@ -43,12 +43,14 @@ public sealed class Module : EverestModule {
         listener.Start();
         On.Celeste.Level.Update += Update;
         On.Monocle.Engine.Update += EngineUpdate;
+        On.Celeste.Level.Render += LevelRender;
         _ = Serve(lifetime.Token);
     }
     public override void Unload() {
         lifetime?.Cancel(); listener?.Stop();
         On.Celeste.Level.Update -= Update;
         On.Monocle.Engine.Update -= EngineUpdate;
+        On.Celeste.Level.Render -= LevelRender;
         if (agentPaused && Engine.Scene is Level pausedLevel) { pausedLevel.Paused = false; agentPaused = false; }
         input.Release(); active = null;
         while (requests.TryDequeue(out _)) { }
@@ -100,6 +102,9 @@ public sealed class Module : EverestModule {
                 ["tas_active"]=TasActive, ["tas_running"]=TasInterop.IsTasRunning?.Invoke() == true,
                 ["frame_checkpoints"]=true, ["playability"]=true, ["platform_telemetry"]=true,
                 ["restore_and_execute"]=SpeedrunInterop.Available, ["pause_control"]=true,
+                ["player_probe"]=true, ["level_probe"]=true, ["room_structure"]=true,
+                ["entities"]=true, ["collision"]=true, ["tiles"]=true,
+                ["capture"]=true, ["menu"]=true, ["save"]=true, ["trajectory"]=true,
                 ["mod_version"]=Metadata.Version.ToString()
             };
             case "get_state": return snapshot.DeepClone();
@@ -148,6 +153,49 @@ public sealed class Module : EverestModule {
                 return new JsonObject { ["paused"]=pauseLevel.Paused, ["frame"]=frame };
             case "get_playability":
                 return new JsonObject { ["playable"]=IsPlayable(Engine.Scene as Level), ["frame"]=frame };
+            case "get_player": {
+                var probe = RequireLevel();
+                var player = probe.Tracker.GetEntity<Player>();
+                if (player == null) return new JsonObject { ["frame"]=frame, ["player"]=null };
+                var state = PlayerProbe.Capture(probe, player, p["internals"]?.GetValue<bool>() ?? false);
+                state["frame"] = frame;
+                return state;
+            }
+            case "get_level":
+                return WorldProbe.Capture(RequireLevel(), frame);
+            case "get_room_structure":
+                return RoomStructure.Capture(RequireLevel());
+            case "get_entities": {
+                var probe = RequireLevel();
+                var result = EntityScan.Capture(probe,
+                    p["fields"]?.GetValue<bool>() ?? false,
+                    Math.Clamp(p["limit"]?.GetValue<int>() ?? 150, 1, 500),
+                    p["whole_room"]?.GetValue<bool>() ?? true);
+                result["frame"] = frame;
+                return result;
+            }
+            case "get_collision": {
+                var probe = RequireLevel();
+                var result = CollisionSnapshot.Capture(probe,
+                    Math.Clamp(p["limit"]?.GetValue<int>() ?? 600, 1, 4000));
+                result["frame"] = frame;
+                return result;
+            }
+            case "get_tiles":
+                return TileAtlas.Capture(RequireLevel(), p["whole_room"]?.GetValue<bool>() ?? true);
+            case "get_menu":
+                return MenuProbe.Capture(Engine.Scene as Level);
+            case "get_save":
+                return SaveProbe.Capture();
+            case "capture":
+                return Capture.Request(p["kind"]?.GetValue<string>() ?? "level");
+            case "capture_result":
+                return Capture.Result();
+            case "trajectory_start":
+                Trajectory.Start();
+                return new JsonObject { ["recording"]=true, ["frame"]=frame };
+            case "trajectory_stop":
+                return Trajectory.Stop(Math.Clamp(p["limit"]?.GetValue<int>() ?? 600, 1, 20000));
             case "stop": if(active != null) Finish("interrupted"); input.Release(); return new JsonObject { ["stopped"]=true };
             case "get_execution": return executions[p["execution_id"]!.GetValue<string>()].DeepClone();
             case "reset_room":
@@ -197,6 +245,7 @@ public sealed class Module : EverestModule {
     static bool IsPlayable(Level? level) =>
         level?.Tracker.GetEntity<Player>() is { Dead: false, InControl: true }
         && !level.InCutscene && !level.FrozenOrPaused && !level.Transitioning;
+    static Level RequireLevel() => Engine.Scene as Level ?? throw new ArgumentException("no active room");
     void EngineUpdate(On.Monocle.Engine.orig_Update orig, Engine engine, Microsoft.Xna.Framework.GameTime time) {
         if(Engine.Scene is Level level) snapshot=Observe(level);
         else {
@@ -205,6 +254,10 @@ public sealed class Module : EverestModule {
         }
         for(int i=0;i<64 && requests.TryDequeue(out var request);i++) request();
         orig(engine,time);
+    }
+    static void LevelRender(On.Celeste.Level.orig_Render orig, Level self) {
+        orig(self);
+        try { Capture.OnRender(); } catch { }
     }
     void Update(On.Celeste.Level.orig_Update orig, Level level) {
         snapshot = Observe(level);
@@ -220,6 +273,7 @@ public sealed class Module : EverestModule {
         }
         try { orig(level); } catch { if(active != null) Finish("interrupted"); throw; }
         frame++; snapshot=Observe(level);
+        Trajectory.Record(level, level.Tracker.GetEntity<Player>(), frame);
         if(job != null && active == job) {
             job.Count++; job.Remaining--;
             if (job.Checkpoints != null) {

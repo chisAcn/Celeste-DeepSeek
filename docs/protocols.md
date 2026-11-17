@@ -27,6 +27,47 @@ Tested build targets: CelesteTAS 3.47.1, Speedrun Tool 3.29.2, Everest 6696. Ins
 
 Upstream: [CelesteTAS exports](https://github.com/EverestAPI/CelesteTAS-EverestInterop/blob/v3.47.1/CelesteTAS-EverestInterop/Source/Module/CelesteTasExports.cs), [Speedrun Tool TAS exports](https://github.com/DemoJameson/Celeste.SpeedrunTool/blob/v3.29.2/SpeedrunTool/Source/ModInterop/Advanced/TasSpeedrunToolInterop.cs).
 
+### Information probes (bridge 0.3.0)
+
+Read-only methods meant for an agent that needs to understand the room instead of guessing:
+
+- `get_player` — sub-pixel position (`position` + `remainder`, plus `exact_position`), speed,
+  named `Player.St*` state, dashes/max, stamina, facing, ground/duck/dead/in-control, held
+  object, left/right wall contact, collider shape and the input-gating timers in seconds.
+  `internals: true` adds about 40 raw private fields (lift speed, dash dir, last aim, wall
+  slide/boost/retention, climb-no-move, force-move, low-friction, min-hold, ...) and the
+  physics constants a re-implementation needs.
+- `get_level` — chapter sid, area id, mode, room, bounds, camera, cutscene/skip/pause/
+  transition flags, chapter ticks, deaths (total and in room), wind vector, core mode,
+  freeze frames (seconds + whole frames, excluded from IGT) and the live dialogue state
+  (open, page, index, waiting-for-input, text and choice nodes).
+- `get_room_structure` — neighbour rooms with bounds and side, all spawn points, default
+  spawn, current respawn point and every map trigger with its rectangle.
+- `get_entities` (`fields`, `limit`, `whole_room`) — stable id, type, coarse kind
+  (hazard/collectible/spring/refill/solid/one_way/trigger/mover/npc), collider shape,
+  collidable/visible/depth, the map attributes, and optionally the entity's own simple
+  fields (capped at 48, mod entities included).
+- `get_collision` (`limit`) — the solid grid merged into rectangles plus every object with
+  kind, collidability and mutability. `coverage.terrain_complete` and `complete` tell the
+  caller whether the snapshot is whole; a partial result is never silently complete.
+- `get_tiles` (`whole_room`) — one character per 8x8 tile: `#` terrain, `^` spikes,
+  `*` strawberry, `H` heart gem, `C` cassette, `S` spring, `R` refill, `B` booster,
+  `T` trigger, `Z` moving block, `=` solid entity, `o` other, `M` Madeline.
+- `get_menu` — TextMenu contents with the selected row, main-menu buttons with the
+  up/down/left/right graph, and file-select slots.
+- `get_save` — save name, slot, filename, play time, deaths, berries, unlocked areas and
+  per-area mode stats (deaths, time, berries, mapped).
+- `capture` + `capture_result` — two-phase PNG screenshot; `kind=level` is the finished
+  frame, `kind=gameplay` renders the gameplay layer without lighting or HUD. The request
+  returns immediately and the pixels are taken at the end of the next render pass.
+- `trajectory_start` / `trajectory_stop` (`limit`) — one row per Level.Update tick with
+  frame, exact position, speed, state, dashes, stamina and ground contact, for calibrating
+  an external simulator against the real game.
+
+`capture` needs two calls because the render pass happens after the update pass:
+`{"method":"capture","params":{"kind":"level"}}` then poll
+`{"method":"capture_result"}` until `status` is `ok` or `error`.
+
 ### Platform telemetry
 
 `get_platforms` returns the current room, bridge frame, total platform count, and up to 16 platform samples. Each sample contains its runtime type, ordinal within that type, world coordinates and collision flag. Tile terrain is excluded. Type plus ordinal is valid for comparisons only while entity enumeration order and membership stay consistent. Consecutive points reveal observed movement direction. Internal path phase is not exposed.

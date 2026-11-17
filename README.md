@@ -96,6 +96,27 @@ model thinks and resumes right before execution. This removes observation
 drift on moving platforms (the main source of `STALE_PLAN` rejections) and
 pairs well with `--settle`.
 
+## Room inspection
+
+The bridge can describe the game instead of only moving Madeline. Every probe is
+read-only and safe to call while playing:
+
+```shell
+python -m agent.inspect --what player --internals   # sub-pixel state, timers, raw fields
+python -m agent.inspect --what level                # chapter, timers, freeze frames, dialogue
+python -m agent.inspect --what room                 # neighbours, spawns, triggers, doorways
+python -m agent.inspect --what entities --fields    # entities with their own fields
+python -m agent.inspect --what collision            # solid rectangles + every collidable object
+python -m agent.inspect --what tiles                # ASCII map, one char per 8x8 tile
+python -m agent.inspect --what menu,save            # menus and save-file progress
+```
+
+`get_collision` reports `complete: false` when terrain or objects were truncated, so a
+partial snapshot is never mistaken for an empty room. Screenshots are two-phase
+(`capture` then `capture_result`) because pixels can only be read at the end of a render
+pass. `trajectory_start` / `trajectory_stop` record one row per update tick for
+simulator calibration.
+
 ## Train from Celeste TAS
 
 The local action prior learns which button combinations tend to follow a previous

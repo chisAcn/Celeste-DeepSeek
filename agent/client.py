@@ -12,7 +12,7 @@ class BridgeClient:
 
     async def __aenter__(self):
         self.reader, self.writer = await asyncio.wait_for(
-            asyncio.open_connection("127.0.0.1", self.port, limit=512 * 1024), self.timeout)
+            asyncio.open_connection("127.0.0.1", self.port, limit=8 * 1024 * 1024), self.timeout)
         return self
 
     async def __aexit__(self, *args):
