@@ -33,6 +33,10 @@ Upstream: [CelesteTAS exports](https://github.com/EverestAPI/CelesteTAS-EverestI
 
 For post-update samples in an execution, send `trace_frames: true` and `trace_platforms: true` together (up to 120 requested frames). A replay reports the first differing platform frame and rejects missing or truncated samples. Run `python -m agent.replay --trace-platforms` for the existing diagonal-dash replay with this extra telemetry. For a platform-specific test, use a room with a moving entity and verify that the same entity changes coordinates over the sampled updates.
 
+### Pause while planning
+
+Bridge 0.2.4 advertises `pause_control`. `pause_game` sets `Level.Paused` when no execution is active and CelesteTAS does not own playback; `resume_game` releases only a pause that the bridge itself created, so a user-opened pause menu is never closed by the client. Both report the resulting `paused` flag and bridge frame. The agent uses the pair to freeze the world while a slow model plans: pause, take the frozen observation, plan, resume, then run the usual pre-execution staleness check before executing. Run with `--pause-planning` (codex or deepseek modes).
+
 ### Restore and execute in one update
 
 Bridge 0.2.2 advertises `restore_and_execute` when Speedrun Tool is bound. The request takes the same bounded parameters as `execute_frames`. The game thread validates the inputs before restoring the bridge-owned slot, captures the restored starting state, and queues the first input for the next Level.Update without a client round trip. Poll `get_execution` by execution ID as usual. With `trace_platforms: true`, the starting state includes the initial platform sample.

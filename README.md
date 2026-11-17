@@ -81,6 +81,21 @@ the grounded state, dash count or position changed while the model was
 thinking. The default budget is three steps, adjustable with `--steps`, and
 `--tas-prior` supplies optional action hints the same way as `--mode gpt`.
 
+Replay-verified routes recorded by the Phase 6 skill workflow can be injected
+as planner hints. The planner receives each matching skill's start/end
+positions and exact action sequence, and is told to prefer replaying a skill
+when its start matches the current grounded position. `--success-room` narrows
+`--exit-room` so only the forward destination room counts as success.
+
+```powershell
+python -m agent.main --real --mode deepseek --settle --exit-room 6b --success-room 6c --steps 12 --skills logs/phase6-live-acceptance.sqlite3
+```
+
+With bridge 0.2.4 or newer, `--pause-planning` freezes the game while the
+model thinks and resumes right before execution. This removes observation
+drift on moving platforms (the main source of `STALE_PLAN` rejections) and
+pairs well with `--settle`.
+
 ## Train from Celeste TAS
 
 The local action prior learns which button combinations tend to follow a previous

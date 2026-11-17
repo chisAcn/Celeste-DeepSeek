@@ -20,6 +20,7 @@ public sealed class Module : EverestModule {
     Job? active;
     readonly InputController input = new();
     readonly string saveSlot = $"CelesteAgentBridge-{Guid.NewGuid():N}";
+    bool agentPaused;
     bool TasActive => TasInterop.IsTasActive?.Invoke() == true;
     public override void Initialize() {
         typeof(TasInterop).ModInterop();
@@ -47,6 +48,7 @@ public sealed class Module : EverestModule {
         lifetime?.Cancel(); listener?.Stop();
         On.Celeste.Level.Update -= Update;
         On.Monocle.Engine.Update -= EngineUpdate;
+        if (agentPaused && Engine.Scene is Level pausedLevel) { pausedLevel.Paused = false; agentPaused = false; }
         input.Release(); active = null;
         while (requests.TryDequeue(out _)) { }
     }
@@ -96,7 +98,7 @@ public sealed class Module : EverestModule {
                 ["celeste_tas"]=TasInterop.IsTasActive != null,
                 ["tas_active"]=TasActive, ["tas_running"]=TasInterop.IsTasRunning?.Invoke() == true,
                 ["frame_checkpoints"]=true, ["playability"]=true, ["platform_telemetry"]=true,
-                ["restore_and_execute"]=SpeedrunInterop.Available,
+                ["restore_and_execute"]=SpeedrunInterop.Available, ["pause_control"]=true,
                 ["mod_version"]=Metadata.Version.ToString()
             };
             case "get_state": return snapshot.DeepClone();
@@ -129,6 +131,17 @@ public sealed class Module : EverestModule {
                 if (handle == null || TasInterop.GetSavestateFrame(handle) != target)
                     return new JsonObject { ["accepted"]=false, ["frame"]=target };
                 return new JsonObject { ["accepted"]=TasInterop.LoadSavestate(handle), ["frame"]=target };
+            case "pause_game":
+            case "resume_game":
+                if (TasActive) throw new ArgumentException("CelesteTAS owns playback");
+                if (active != null) throw new ArgumentException("input execution active");
+                if (Engine.Scene is not Level pauseLevel) throw new ArgumentException("no active room");
+                if (req["method"]!.GetValue<string>() == "pause_game") {
+                    if (!pauseLevel.Paused) { pauseLevel.Paused = true; agentPaused = true; }
+                } else if (agentPaused) {
+                    pauseLevel.Paused = false; agentPaused = false;
+                }
+                return new JsonObject { ["paused"]=pauseLevel.Paused, ["frame"]=frame };
             case "get_playability":
                 return new JsonObject { ["playable"]=IsPlayable(Engine.Scene as Level), ["frame"]=frame };
             case "stop": if(active != null) Finish("interrupted"); input.Release(); return new JsonObject { ["stopped"]=true };

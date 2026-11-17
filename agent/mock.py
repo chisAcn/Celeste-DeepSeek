@@ -15,11 +15,18 @@ class MockBridge:
         self.state = GameState()
         self.results = {}
         self.held = set()
+        self.paused = False
 
     def dispatch(self, request):
         method, params = request.method, request.params
         if method == "ping":
-            return {"backend": "mock", "tas": False}
+            return {"backend": "mock", "tas": False, "pause_control": True}
+        if method == "pause_game":
+            self.paused = True
+            return {"paused": True, "frame": self.state.frame}
+        if method == "resume_game":
+            self.paused = False
+            return {"paused": False, "frame": self.state.frame}
         if method == "get_state":
             return self.state.model_dump()
         if method == "reset_room":
