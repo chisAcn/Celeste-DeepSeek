@@ -104,6 +104,17 @@ async def observe_for_plan(registry, settle, exit_room):
         await asyncio.sleep(0.08)
 
 
+async def wait_playable(client, timeout=3.0):
+    """Block until the bridge accepts input again (respawn, room transition, unpause)."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while True:
+        if (await client.call("get_playability")).get("playable"):
+            return True
+        if asyncio.get_running_loop().time() >= deadline:
+            return False
+        await asyncio.sleep(0.08)
+
+
 async def run(client, mode, steps=20, action_prior=None, *, settle=False, exit_room=None,
               success_room=None, skills=None, pause_planning=False):
     from agent.protocol import ActionSequence
@@ -166,9 +177,10 @@ async def run(client, mode, steps=20, action_prior=None, *, settle=False, exit_r
                 retries += 1
                 if retries >= 3:
                     return "FAILED"
-                await registry.invoke("reset_room")
+                # The room respawns on its own; reloading the level near a room
+                # boundary has crashed the transition routine (SpeedrunTool hook).
+                await wait_playable(client, timeout=5)
                 previous_action = None
-                await asyncio.sleep(0.5)
                 continue
             if mode in {"gpt", "codex", "deepseek"}:
                 paused_here = False
@@ -258,7 +270,20 @@ async def run(client, mode, steps=20, action_prior=None, *, settle=False, exit_r
                     if reached_exit(current):
                         return "SUCCESS"
                     continue
-            result = await registry.invoke("execute_actions", **seq.model_dump())
+            if not await wait_playable(client):
+                record({"step": step, "state": "NOT_PLAYABLE", "plan": plan.model_dump(),
+                        **observations})
+                previous_action = None
+                continue
+            try:
+                result = await registry.invoke("execute_actions", **seq.model_dump())
+            except RuntimeError as error:
+                if not any(token in str(error) for token in ("not playable", "busy")):
+                    raise
+                record({"step": step, "state": "NOT_PLAYABLE", "reason": str(error),
+                        "plan": plan.model_dump(), **observations})
+                previous_action = None
+                continue
             after = GameState.model_validate(result["after"])
             if settle:
                 settled_state = await observe_for_plan(registry, True, exit_room)
@@ -289,9 +314,10 @@ async def run(client, mode, steps=20, action_prior=None, *, settle=False, exit_r
     finally:
         try:
             await client.call("stop")
-        finally:
-            if llm:
-                await llm.close()
+        except (OSError, RuntimeError, TimeoutError):
+            pass
+        if llm:
+            await llm.close()
 
 
 async def main():

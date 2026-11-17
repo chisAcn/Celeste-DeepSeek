@@ -27,6 +27,8 @@ class MockBridge:
         if method == "resume_game":
             self.paused = False
             return {"paused": False, "frame": self.state.frame}
+        if method == "get_playability":
+            return {"playable": not self.paused, "frame": self.state.frame}
         if method == "get_state":
             return self.state.model_dump()
         if method == "reset_room":
