@@ -109,10 +109,19 @@ python -m agent.inspect --what entities --fields    # entities with their own fi
 python -m agent.inspect --what collision            # solid rectangles + every collidable object
 python -m agent.inspect --what tiles                # ASCII map, one char per 8x8 tile
 python -m agent.inspect --what menu,save            # menus and save-file progress
+python -m agent.inspect --what capture --kind gameplay   # PNG of the gameplay layer
+python -m agent.room_map --objects                  # labelled map + object bounds + doorways
 ```
 
+`agent.room_map` prints the room with a world-coordinate ruler, the player's current
+tile, every collidable object with its world bounds, and the neighbouring room on each
+side — usually the fastest way to answer "where is the exit".
+
 `get_collision` reports `complete: false` when terrain or objects were truncated, so a
-partial snapshot is never mistaken for an empty room. Screenshots are two-phase
+partial snapshot is never mistaken for an empty room. Terrain is read from the engine's
+own `SolidTiles` collider; `coverage.source` says which path was used and
+`coverage.solids` echoes the diagnostic, because the tile char arrays are indexed in a
+per-level space that can read empty without raising. Screenshots are two-phase
 (`capture` then `capture_result`) because pixels can only be read at the end of a render
 pass. `trajectory_start` / `trajectory_stop` record one row per update tick for
 simulator calibration.

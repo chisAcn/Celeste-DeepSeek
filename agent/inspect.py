@@ -14,7 +14,8 @@ import json
 from agent.client import BridgeClient
 
 TOPICS = (
-    "player", "level", "room", "entities", "collision", "tiles", "menu", "save",
+    "player", "level", "room", "entities", "collision", "tiles",
+    "menu", "save", "capture",
 )
 
 
@@ -37,6 +38,17 @@ def request_for(topic, args):
     return "get_save", {}
 
 
+async def capture(client, kind, tries=60, delay=0.1):
+    """Screen captures render on the next frame, so poll for the result."""
+    await client.call("capture", kind=kind)
+    for _ in range(tries):
+        await asyncio.sleep(delay)
+        result = await client.call("capture_result")
+        if result.get("status") != "pending":
+            return result
+    return {"status": "timeout", "kind": kind}
+
+
 def print_tiles(payload):
     print(f"room {payload['room']}  region {payload['region']}")
     for row in payload["rows"]:
@@ -53,8 +65,11 @@ async def main(args):
         raise SystemExit(f"unknown topic(s): {', '.join(unknown)}; pick from {', '.join(TOPICS)}")
     async with BridgeClient(32123, timeout=12) as client:
         for topic in topics:
-            method, params = request_for(topic, args)
-            result = await client.call(method, **params)
+            if topic == "capture":
+                result = await capture(client, args.kind)
+            else:
+                method, params = request_for(topic, args)
+                result = await client.call(method, **params)
             if topic == "tiles" and not args.json:
                 print_tiles(result)
                 continue
@@ -74,5 +89,7 @@ if __name__ == "__main__":
     parser.add_argument("--fields", action="store_true",
                         help="reflect every entity's own simple fields")
     parser.add_argument("--limit", type=int, default=120)
+    parser.add_argument("--kind", default="level", choices=("level", "gameplay"),
+                        help="capture source: whole level or in-game view")
     parser.add_argument("--json", action="store_true", help="machine readable output")
     asyncio.run(main(parser.parse_args()))

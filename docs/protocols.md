@@ -27,7 +27,7 @@ Tested build targets: CelesteTAS 3.47.1, Speedrun Tool 3.29.2, Everest 6696. Ins
 
 Upstream: [CelesteTAS exports](https://github.com/EverestAPI/CelesteTAS-EverestInterop/blob/v3.47.1/CelesteTAS-EverestInterop/Source/Module/CelesteTasExports.cs), [Speedrun Tool TAS exports](https://github.com/DemoJameson/Celeste.SpeedrunTool/blob/v3.29.2/SpeedrunTool/Source/ModInterop/Advanced/TasSpeedrunToolInterop.cs).
 
-### Information probes (bridge 0.3.0)
+### Information probes (bridge 0.3.1)
 
 Read-only methods meant for an agent that needs to understand the room instead of guessing:
 
@@ -47,16 +47,22 @@ Read-only methods meant for an agent that needs to understand the room instead o
   (hazard/collectible/spring/refill/solid/one_way/trigger/mover/npc), collider shape,
   collidable/visible/depth, the map attributes, and optionally the entity's own simple
   fields (capped at 48, mod entities included).
-- `get_collision` (`limit`) — the solid grid merged into rectangles plus every object with
-  kind, collidability and mutability. `coverage.terrain_complete` and `complete` tell the
-  caller whether the snapshot is whole; a partial result is never silently complete.
+- `get_collision` (`limit`) — the solid geometry as rectangles plus every object with
+  kind, collidability and mutability. Terrain comes from the engine's own `SolidTiles`
+  collider (`coverage.source: "collider"`), falling back to the tile array only when a
+  level exposes no solid entity (`coverage.source: "solids_data"`).
+  `coverage.terrain_complete`, `coverage.solids` and `complete` tell the caller whether
+  the snapshot is whole; a partial result is never silently complete.
 - `get_tiles` (`whole_room`) — one character per 8x8 tile: `#` terrain, `^` spikes,
   `*` strawberry, `H` heart gem, `C` cassette, `S` spring, `R` refill, `B` booster,
-  `T` trigger, `Z` moving block, `=` solid entity, `o` other, `M` Madeline.
+  `T` trigger, `Z` moving block, `-` jump-through platform, `=` solid entity, `o` other,
+  `M` Madeline. `solid_cells` counts painted terrain cells and `solids` echoes the
+  collider diagnostic so an empty map is distinguishable from a broken read.
 - `get_menu` — TextMenu contents with the selected row, main-menu buttons with the
   up/down/left/right graph, and file-select slots.
-- `get_save` — save name, slot, filename, play time, deaths, berries, unlocked areas and
-  per-area mode stats (deaths, time, berries, mapped).
+- `get_save` — save name, slot, filename, play time, deaths, berries, unlocked areas,
+  assist/variant/cheat flags and per-area mode stats. A pathological field never fails
+  the whole call: `areas_error` reports what was skipped.
 - `capture` + `capture_result` — two-phase PNG screenshot; `kind=level` is the finished
   frame, `kind=gameplay` renders the gameplay layer without lighting or HUD. The request
   returns immediately and the pixels are taken at the end of the next render pass.

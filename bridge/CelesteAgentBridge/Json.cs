@@ -59,16 +59,29 @@ internal static class J {
         } catch { return null; }
     }
 
+    // Probes must never die on one hostile field (collections, EntityID sets,
+    // arbitrary mod types). Numeric reads degrade to 0 instead of throwing.
+    static readonly Dictionary<Type, bool> convertible = new();
+
+    static bool Convertible(Type type) {
+        if (convertible.TryGetValue(type, out var known)) return known;
+        bool ok = typeof(IConvertible).IsAssignableFrom(type) && !type.IsEnum;
+        convertible[type] = ok;
+        return ok;
+    }
+
     public static float F(object target, string name) {
         var v = Get(target, name);
-        return v == null ? 0f : Convert.ToSingle(v, CultureInfo.InvariantCulture);
+        return v == null || !Convertible(v.GetType())
+            ? 0f : Convert.ToSingle(v, CultureInfo.InvariantCulture);
     }
 
     public static bool B(object target, string name) => Get(target, name) is true;
 
     public static int I(object target, string name) {
         var v = Get(target, name);
-        return v == null ? 0 : Convert.ToInt32(v, CultureInfo.InvariantCulture);
+        return v == null || !Convertible(v.GetType())
+            ? 0 : Convert.ToInt32(v, CultureInfo.InvariantCulture);
     }
 
     public static JsonNode? Value(object? v) => v switch {

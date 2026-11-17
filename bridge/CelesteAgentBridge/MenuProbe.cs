@@ -119,16 +119,19 @@ internal static class SaveProbe {
         var data = SaveData.Instance;
         if (data == null) return new JsonObject { ["available"] = false };
         var areas = new JsonArray();
-        if (J.Get(data, "Areas") is IEnumerable list) {
-            foreach (var stats in list) {
-                var entry = new JsonObject {
-                    ["area_id"] = J.I(stats, "ID"),
-                    ["name"] = AreaName(J.I(stats, "ID")),
-                    ["modes"] = Modes(stats)
-                };
-                areas.Add(entry);
+        string? areasError = null;
+        try {
+            if (J.Get(data, "Areas") is IEnumerable list) {
+                foreach (var stats in list) {
+                    var entry = new JsonObject {
+                        ["area_id"] = J.I(stats, "ID"),
+                        ["name"] = AreaName(J.I(stats, "ID")),
+                        ["modes"] = Modes(stats)
+                    };
+                    areas.Add(entry);
+                }
             }
-        }
+        } catch (Exception e) { areasError = e.GetType().Name + ": " + e.Message; }
         return new JsonObject {
             ["available"] = true,
             ["name"] = data.Name,
@@ -140,8 +143,12 @@ internal static class SaveProbe {
             ["strawberries"] = data.TotalStrawberries,
             ["golden_strawberries"] = data.TotalGoldenStrawberries,
             ["unlocked_areas"] = data.UnlockedAreas,
+            ["assist_mode"] = data.AssistMode,
+            ["variant_mode"] = data.VariantMode,
+            ["cheat_mode"] = data.CheatMode,
             ["last_area"] = J.Value(J.Get(data, "LastArea")),
-            ["areas"] = areas
+            ["areas"] = areas,
+            ["areas_error"] = areasError
         };
     }
 
@@ -150,13 +157,15 @@ internal static class SaveProbe {
         if (J.Get(stats, "Modes") is not IEnumerable modes) return array;
         int index = 0;
         foreach (var mode in modes) {
-            array.Add(new JsonObject {
-                ["mode"] = index++,
-                ["deaths"] = J.I(mode, "Deaths"),
-                ["time_ticks"] = J.Value(J.Get(mode, "Time")),
-                ["strawberries"] = J.I(mode, "Strawberries"),
-                ["mapped"] = J.B(mode, "Mapped")
-            });
+            try {
+                array.Add(new JsonObject {
+                    ["mode"] = index++,
+                    ["deaths"] = J.I(mode, "Deaths"),
+                    ["time_ticks"] = J.Value(J.Get(mode, "Time")),
+                    ["strawberries"] = J.I(mode, "Strawberries"),
+                    ["mapped"] = J.B(mode, "Mapped")
+                });
+            } catch { index++; }
         }
         return array;
     }

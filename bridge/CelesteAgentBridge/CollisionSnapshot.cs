@@ -6,69 +6,31 @@ using Monocle;
 namespace CelesteAgentBridge;
 
 // A collision world the agent can reason about without screenshots: the solid
-// grid merged into rectangles, plus every collidable object and its role.
+// grid as rectangles, plus every collidable object and its role.
 internal static class CollisionSnapshot {
     const int Tile = 8;
 
     public static JsonObject Capture(Level level, int maxRects) {
         var bounds = level.Bounds;
-        int tx0 = bounds.Left / Tile, tx1 = bounds.Right / Tile;
-        int ty0 = bounds.Top / Tile, ty1 = bounds.Bottom / Tile;
-
-        bool complete = true;
-        int solidTiles = 0;
         var rects = new JsonArray();
-        var open = new Dictionary<(int x, int w), Rectangle>();
-        var closed = new List<Rectangle>();
+        bool complete = true;
+        long solidArea = 0;
+        string source = "collider";
 
-        void Flush((int x, int w) key) {
-            if (!open.TryGetValue(key, out var r)) return;
-            open.Remove(key);
-            closed.Add(r);
-        }
-
-        for (int ty = ty0; ty < ty1; ty++) {
-            int runStart = -1;
-            for (int tx = tx0; tx <= tx1; tx++) {
-                bool solid = false;
-                if (tx < tx1) {
-                    try {
-                        solid = level.SolidsData[tx, ty] != '0';
-                    } catch {
-                        complete = false;
-                    }
-                }
-                if (solid) {
-                    solidTiles++;
-                    if (runStart < 0) runStart = tx;
-                } else if (runStart >= 0) {
-                    int width = tx - runStart;
-                    var key = (runStart, width);
-                    if (open.TryGetValue(key, out var existing) && existing.Bottom == ty * Tile) {
-                        existing.Height += Tile;
-                        open[key] = existing;
-                    } else {
-                        Flush(key);
-                        open[key] = new Rectangle(runStart * Tile, ty * Tile, width * Tile, Tile);
-                    }
-                    runStart = -1;
-                }
+        // Preferred source: the engine's own collider rectangles. Tile char
+        // arrays are indexed in a per-level space that silently reads empty.
+        var engineRects = SolidProbe.Rectangles(level);
+        if (engineRects.Count > 0) {
+            foreach (var rect in engineRects) {
+                if (rects.Count >= maxRects) { complete = false; break; }
+                solidArea += (long)rect.Width * rect.Height;
+                rects.Add(Rect(rect));
             }
-            // Runs that did not continue into this row are finished.
-            var stale = new List<(int, int)>();
-            foreach (var (key, rect) in open)
-                if (rect.Bottom < ty * Tile + Tile) stale.Add(key);
-            foreach (var key in stale) Flush(key);
-        }
-        foreach (var key in open.Keys.ToList()) Flush(key);
-
-        foreach (var rect in closed) {
-            if (rects.Count >= maxRects) { complete = false; break; }
-            rects.Add(new JsonObject {
-                ["x"] = rect.X, ["y"] = rect.Y,
-                ["width"] = rect.Width, ["height"] = rect.Height,
-                ["kind"] = "solid"
-            });
+        } else {
+            source = "solids_data";
+            solidArea = ScanTiles(level, bounds, rects, maxRects,
+                ref complete, out string? error);
+            if (error != null) complete = false;
         }
 
         var objects = new JsonArray();
@@ -97,14 +59,79 @@ internal static class CollisionSnapshot {
             ["terrain"] = rects,
             ["objects"] = objects,
             ["coverage"] = new JsonObject {
-                ["solid_tiles"] = solidTiles,
-                ["solid_ratio"] = J.Num((float)solidTiles * Tile * Tile / roomArea),
+                ["source"] = source,
+                ["solid_tiles"] = (int)Math.Min(int.MaxValue, solidArea / (Tile * Tile)),
+                ["solid_ratio"] = J.Num((float)solidArea / roomArea),
                 ["terrain_rects"] = rects.Count,
                 ["objects"] = entityCount,
                 ["terrain_complete"] = complete,
-                ["objects_truncated"] = truncated
+                ["objects_truncated"] = truncated,
+                ["solids"] = SolidProbe.Diagnose(level)
             },
             ["complete"] = complete && !truncated
         };
+    }
+
+    static JsonObject Rect(Rectangle rect) => new() {
+        ["x"] = rect.X, ["y"] = rect.Y,
+        ["width"] = rect.Width, ["height"] = rect.Height,
+        ["kind"] = "solid"
+    };
+
+    // Fallback when the level exposes no SolidTiles: merge tile runs vertically.
+    static long ScanTiles(Level level, Rectangle bounds, JsonArray rects,
+                          int maxRects, ref bool complete, out string? error) {
+        int tx0 = bounds.Left / Tile, tx1 = bounds.Right / Tile;
+        int ty0 = bounds.Top / Tile, ty1 = bounds.Bottom / Tile;
+        error = null;
+        long area = 0;
+        var open = new Dictionary<(int x, int w), Rectangle>();
+        var closed = new List<Rectangle>();
+
+        void Flush((int x, int w) key) {
+            if (!open.TryGetValue(key, out var r)) return;
+            open.Remove(key);
+            closed.Add(r);
+        }
+
+        for (int ty = ty0; ty < ty1; ty++) {
+            int runStart = -1;
+            for (int tx = tx0; tx <= tx1; tx++) {
+                bool solid = false;
+                if (tx < tx1) {
+                    try {
+                        solid = level.SolidsData[tx, ty] != '0';
+                    } catch (Exception e) {
+                        error ??= e.GetType().Name + ": " + e.Message;
+                    }
+                }
+                if (solid) {
+                    area += Tile * Tile;
+                    if (runStart < 0) runStart = tx;
+                } else if (runStart >= 0) {
+                    int width = tx - runStart;
+                    var key = (runStart, width);
+                    if (open.TryGetValue(key, out var existing) && existing.Bottom == ty * Tile) {
+                        existing.Height += Tile;
+                        open[key] = existing;
+                    } else {
+                        Flush(key);
+                        open[key] = new Rectangle(runStart * Tile, ty * Tile, width * Tile, Tile);
+                    }
+                    runStart = -1;
+                }
+            }
+            var stale = new List<(int, int)>();
+            foreach (var (key, rect) in open)
+                if (rect.Bottom < ty * Tile + Tile) stale.Add(key);
+            foreach (var key in stale) Flush(key);
+        }
+        foreach (var key in open.Keys.ToList()) Flush(key);
+
+        foreach (var rect in closed) {
+            if (rects.Count >= maxRects) { complete = false; break; }
+            rects.Add(Rect(rect));
+        }
+        return area;
     }
 }
