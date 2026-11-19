@@ -338,9 +338,10 @@ STILL OPEN: `Standby.resting`, `SkillBook.match` and `LocalRetry.offer` still
 require `on_ground`, so a step that ends on a wall publishes no anchor, is
 never matched or retried, and the session waits out `anchor_timeout` instead of
 continuing. The stance answers "was this a landing"; it does not yet answer
-"can the next step be planned from up there".
+"can the next step be planned from up there". (Closed by 0.3.6 below: the
+gates accept a climb, and the grip is kept so there is a wall to plan from.)
 
-### Planning from a wall (built 2026-11-19, in-game check pending a restart)
+### Planning from a wall (built and confirmed in game 2026-11-19)
 
 A climb landing has to survive the tick that ends the job. It does not: `Finish`
 releases the virtual input, and the next `Update` drops her off the wall -- the
@@ -385,3 +386,49 @@ To check after restarting Celeste:
    `StClimb` after the job, not `StNormal` -- and stays there for a second.
 3. The session publishes a second anchor from that state instead of waiting out
    `anchor_timeout`, which is what step three was for.
+
+#### In game, after the restart
+
+Celeste was restarted onto 0.3.6 and `ping` answered
+`mod_version: "0.3.6"`, `hold_after: true`, `player_state: true`. All three
+checks ran against the same save, room 8, in the pocket at the bottom left
+(the one that has no exit; the geometry is a 16px wall stub at `x=2712` and a
+taller wall at `x=2704` above it).
+
+1. **The grip survives the job.** `execute_frames` with
+   `left+grab x2, left+up+grab x10` and `hold_after: ["grab"]` reported
+   `completed / 12`, and `after` was `StClimb`, `on_ground: false`, at
+   `(2716, -1705)`. Sampled every 100ms for 1.2s she stayed `StClimb` at
+   `(2716, -1705)` throughout, stamina draining 108.5 -> 94.3. The same wall
+   with `hold_after: []` read `StClimb` in `after` and `StNormal` 30ms later --
+   the exact 30ms drop this feature exists to remove.
+2. **The session plans from the wall.** A 20-frame route
+   (`left+grab x2, left+up+grab x18`, recorded live from `(2709, -1712)`,
+   ending `StClimb` at `(2708, -1722)`) was put in the book with
+   `end_stance: "climb"` and replayed by the real `ExecutorAgent` through
+   `TeamSession`, `anchor_timeout` left at 8.0s:
+
+   | t (s) | event |
+   |---|---|
+   | 0.33 | `ANCHOR 1` at `(2708, -1712)`, `still_for 0.23` |
+   | 1.09 | `VERIFY 1` `LANDED`, `verified: true`, 20 frames, no deviation |
+   | 1.11 | `ANCHOR 2` at `(2708, -1723)`, `still_for 0.23` |
+   | 1.30 | `VERIFY 2` `LANDED` |
+
+   The second anchor was published 20ms after the landing was verified. The
+   session reported `anchors 2, standby_seconds 0.2, longest_standby 0.1` --
+   not 8.0 -- and `planner_replays 1`, so the wall route was chosen by the book,
+   not by the model. The one context the model was given (`ANCHOR 2`) carried
+   `state: StClimb`, `on_ground: false` and `footing.stance: "climb"`.
+3. **Release still drops her.** The step planned from that anchor
+   (`grab x6`, no stance in its contract) sent an empty `hold_after`, and she
+   was back on the pedestal at `(2708, -1712)`, `StNormal`, stamina refilled to
+   110, when the session ended. The grip is a property of the promise, not of
+   the button.
+
+STILL OPEN: only a replayed route can promise `climb`. `Plan` has no stance
+field, so a fresh model plan builds its contract through
+`StepContract.for_plan`, whose `Success` carries an x band and no stance --
+`_payload` then sends an empty `hold_after` and a plan that happens to end on a
+wall drops her. Closing that needs a way for a plan to declare its landing
+posture, which is a planner question, not a bridge one.

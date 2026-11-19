@@ -402,6 +402,10 @@ python -m agent.kb --types Spikes --air --show        # 空中姿态，连正文
 
 代价是这段时间虚拟输入一直装着（真实键盘不生效），以及规划器要在上下文里看到 `footing`：她正被握住，**第一段输入必须包含 grab**，否则第一帧就松手。桥接不到 0.3.6 时 `hold_after` 被忽略，于是挂墙仍读作空中，行为退回上一版——不会假装。
 
+实机（房间 8，0.3.6）：`left+grab x2, left+up+grab x10` 以 `hold_after: ["grab"]` 收尾后停在 `(2716, -1705)`、`StClimb`、不着地，每 100ms 采样一次、1.2 秒内一直是 `StClimb`（体力 108.5 → 94.3）；同样的动作换成空 `hold_after`，30ms 后就是 `StNormal`。把一条 20 帧的爬墙路线记进路线书再让 `TeamSession` 重放，第二个锚点在落地核验后 **20ms** 发出（`standby_seconds 0.2`，超时设的是 8 秒），发给模型的上下文带着 `footing.stance: "climb"`。
+
+只有重放路线能承诺 `climb`：`Plan` 没有姿态字段，模型新写的计划走 `StepContract.for_plan`，`Success` 只带 x 区间，于是 `hold_after` 是空的——碰巧挂在墙上收尾也会掉下去。要补这一块得先让计划能声明落点姿态。
+
 `ABORTED` 与 `UNSATISFIED` 的区别是整个拆分的意义所在：前者说明世界在计划执行期间变了，后者说明计划本身判断错了，两者需要完全不同的下一个计划。
 
 在 `--collab` 下 `REJECTED` 应该是**结构上不可能**的：锚点承诺保证计划据以推理的状态就是第一条输入落到的状态，而锚点在发送前还会再核一次。它一旦出现，说明承诺本身破了，日志会把它当作缺陷记成 `STALE_PLAN` 并计入 `SESSION.rejected`——目标值是 0。
