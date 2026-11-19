@@ -386,6 +386,15 @@ python -m agent.kb --types Spikes --air --show        # 空中姿态，连正文
 | `SUCCEEDED` | 帧全跑完且落在带内 | 推进下一步 |
 | `DIED` | 死亡 | 等自动重生（**不 `reset_room`**，会崩） |
 
+成功带默认只看 `x`/`y` 区间，这是有意的：模型给的是一条弧线的落点，不是一次状态断言。需要断言姿态时用 `Success.stance`，取 `ground` / `climb` / `air`：
+
+- `climb` 是抓墙（`StClimb`），和"空中"不是同一件事。房间 8 的 TAS 段就停在墙面上，同一组坐标在墙上和在半空是两种不同的下一步。
+- 契约自相矛盾（`stance="climb"` 配 `on_ground=True`）在构造时就被拒，不会等到跑完才报。
+- 桥接 0.3.5 起 `get_state` 带 `state`（状态机名，如 `StClimb`）。更早的桥接该字段为空，此时要求 `climb` 会得到 `stance_unknown`——快照看不见墙，就不该假装看见了。
+- 默认 `None` 保持旧行为，现存路线书与契约一条都不用改。
+
+已知缺口：抓墙时 `Standby` 仍判 `SETTLING`，锚点发不出来，所以"从墙上接着规划"这一步还没打通（`SkillBook.match` 与 `LocalRetry` 同样要求站地）。`stance` 目前只解决"落点判对了没有"。
+
 `ABORTED` 与 `UNSATISFIED` 的区别是整个拆分的意义所在：前者说明世界在计划执行期间变了，后者说明计划本身判断错了，两者需要完全不同的下一个计划。
 
 在 `--collab` 下 `REJECTED` 应该是**结构上不可能**的：锚点承诺保证计划据以推理的状态就是第一条输入落到的状态，而锚点在发送前还会再核一次。它一旦出现，说明承诺本身破了，日志会把它当作缺陷记成 `STALE_PLAN` 并计入 `SESSION.rejected`——目标值是 0。

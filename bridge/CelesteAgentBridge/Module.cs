@@ -113,7 +113,7 @@ public sealed class Module : EverestModule {
                 ["player_probe"]=true, ["level_probe"]=true, ["room_structure"]=true,
                 ["entities"]=true, ["collision"]=true, ["tiles"]=true,
                 ["capture"]=true, ["menu"]=true, ["save"]=true, ["trajectory"]=true,
-                ["expect"]=true, ["positions"]=true,
+                ["expect"]=true, ["positions"]=true, ["player_state"]=true,
                 ["mod_version"]=Metadata.Version.ToString()
             };
             case "get_state": return snapshot.DeepClone();
@@ -406,7 +406,7 @@ public sealed class Module : EverestModule {
         var p=level.Tracker.GetEntity<Player>();
         return new JsonObject {
             ["protocol_version"]="1.0", ["frame"]=frame,
-            ["player"]=p==null?null:new JsonObject { ["x"]=p.X, ["y"]=p.Y, ["vx"]=p.Speed.X, ["vy"]=p.Speed.Y, ["on_ground"]=p.OnGround(), ["dashes"]=p.Dashes, ["stamina"]=p.Stamina, ["dead"]=p.Dead },
+            ["player"]=p==null?null:new JsonObject { ["x"]=p.X, ["y"]=p.Y, ["vx"]=p.Speed.X, ["vy"]=p.Speed.Y, ["on_ground"]=p.OnGround(), ["dashes"]=p.Dashes, ["stamina"]=p.Stamina, ["dead"]=p.Dead, ["state"]=PlayerProbe.StateName(p) },
             ["room"]=new JsonObject { ["name"]=level.Session.Level, ["completed"]=level.Completed }
         };
     }

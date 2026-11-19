@@ -277,3 +277,33 @@ re-tried: horizontal dash, super at `2748`, jump held, up-right dash at
 face without entering `StClimb`, then falls back through the spike field. The
 pocket is still not solved from here; that needs the 7 -> 7a route, not a
 better input.
+
+### Stance in the landing check (built 2026-11-19, in-game check pending)
+
+The landing check had two postures, grounded and not, so hanging on a wall was
+filed under "not" -- the same bucket as falling past the drop. `Success.stance`
+adds the third one (`ground` / `climb` / `air`), and bridge 0.3.5 reports the
+state machine name on `get_state` so the executor can read it.
+
+Verified off-line (165 tests, ruff clean):
+
+- `PlayerState.stance()` returns `climb` for `StClimb`, otherwise falls back to
+  `on_ground`. A snapshot without a `state` key -- every bridge before 0.3.5 --
+  parses with `state: ""` and degrades to the old two-way reading.
+- A contract with `stance: "climb"` accepts a `StClimb` snapshot at the target
+  coordinates and returns `not_climbing` for `StNormal` at the same coordinates.
+  `stance: "ground"` returns `not_grounded` for the wall grab.
+- A blind snapshot asked for `climb` returns `stance_unknown` rather than a
+  guess.
+- `stance: None` (the default, and what every existing route carries) changes
+  nothing: the x/y bands decide, as before.
+- `stance` contradicting `on_ground` is refused when the contract is built.
+
+Not yet verified in the running game: the live instance is still 0.3.4, and the
+installed 0.3.5 DLL only loads on a restart. The new client parsed a 0.3.4
+`get_state` without error (`state: ""`, `stance: "ground"`), so the two sides
+are order-independent. After a restart, two things to look at:
+
+1. `ping` reports `mod_version: 0.3.5` and `player_state: true`.
+2. Standing and holding a wall at the same coordinates give `StNormal` and
+   `StClimb`, and a `stance: "climb"` contract accepts only the second.

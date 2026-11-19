@@ -23,6 +23,9 @@ from agent.agents.messages import (
 from agent.protocol import ActionSequence, ExecutionResult, GameState
 
 MOVING = frozenset({"left", "right", "up", "jump", "dash"})
+# What to say when the stance a contract asked for is not the one she is in.
+STANCE_FAILURE = {"ground": "not_grounded", "climb": "not_climbing",
+                  "air": "not_airborne"}
 
 
 def _point(state: GameState) -> tuple[float, float] | None:
@@ -76,6 +79,13 @@ class ExecutorAgent:
             return "player_dead"
         if ok.on_ground is not None and player.on_ground != ok.on_ground:
             return "not_grounded"
+        if ok.stance is not None and player.stance() != ok.stance:
+            # A bridge that does not report the state machine cannot tell a
+            # wall from a fall, and "not climbing" would be a guess dressed as
+            # a verdict. Say the snapshot is blind instead.
+            if ok.stance == "climb" and not player.state:
+                return "stance_unknown"
+            return STANCE_FAILURE[ok.stance]
         if ok.min_dashes is not None and player.dashes < ok.min_dashes:
             return "no_dash"
         if not within(player.x, ok.x):

@@ -10,7 +10,14 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
-from agent.protocol import ActionSequence, Deviation, FrameAction, GameState, Schema
+from agent.protocol import (
+    ActionSequence,
+    Deviation,
+    FrameAction,
+    GameState,
+    Schema,
+    Stance,
+)
 
 Band = tuple[float, float]
 
@@ -57,9 +64,17 @@ class Precondition(Schema):
 
 
 class Success(Schema):
-    """What must hold at the end for the step to count as landed."""
+    """What must hold at the end for the step to count as landed.
+
+    ``stance`` is the three-way version of ``on_ground``: hanging on a wall is
+    neither standing nor falling, and a route that ends there has to say so or
+    the x/y bands will call it a landing on their own. ``None`` keeps the old
+    behaviour -- check the bands and nothing else -- so every route recorded
+    before this field existed still replays.
+    """
 
     on_ground: bool | None = None
+    stance: Stance | None = None
     min_dashes: int | None = Field(default=None, ge=0)
     x: Band | None = None
     y: Band | None = None
@@ -69,6 +84,15 @@ class Success(Schema):
         for band in (self.x, self.y):
             if band and band[0] > band[1]:
                 raise ValueError("band minimum exceeds maximum")
+        return self
+
+    @model_validator(mode="after")
+    def consistent(self):
+        """A stance that contradicts on_ground can never hold; refuse it early."""
+        if self.stance is None or self.on_ground is None:
+            return self
+        if (self.stance == "ground") != self.on_ground:
+            raise ValueError("stance and on_ground disagree")
         return self
 
 

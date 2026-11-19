@@ -7,6 +7,9 @@ class Schema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+Stance = Literal["ground", "climb", "air"]
+
+
 class PlayerState(Schema):
     x: float = 0
     y: float = 0
@@ -16,6 +19,20 @@ class PlayerState(Schema):
     dashes: int = 1
     stamina: float = 110
     dead: bool = False
+    # StateMachine name, e.g. "StClimb". Empty on bridges older than 0.3.5;
+    # stance then falls back to on_ground, which cannot see a wall.
+    state: str = ""
+
+    def stance(self) -> Stance:
+        """Posture as a contract sees it: holding a wall, grounded, or falling.
+
+        Grabbing a wall is a landing. Without this, a step that ends with her
+        hanging on a wall reads as airborne and can be booked as landed only
+        because the x/y bands happened to hold.
+        """
+        if self.state == "StClimb":
+            return "climb"
+        return "ground" if self.on_ground else "air"
 
 
 class RoomState(Schema):

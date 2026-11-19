@@ -4,15 +4,16 @@ import pytest
 
 from agent.agents import ExecutorAgent, StepContract
 from agent.agents.messages import Abort, Precondition, Success
-from agent.protocol import ActionSequence, FrameAction, GameState
+from agent.protocol import ActionSequence, FrameAction, GameState, PlayerState
 
 
 def state(x=0.0, y=-1128.0, *, dead=False, on_ground=True, dashes=1, room="6b",
-          vx=0.0, vy=0.0):
+          vx=0.0, vy=0.0, state_name=""):
     return GameState.model_validate({
         "frame": 0,
         "player": {"x": x, "y": y, "vx": vx, "vy": vy, "on_ground": on_ground,
-                   "dashes": dashes, "stamina": 110, "dead": dead},
+                   "dashes": dashes, "stamina": 110, "dead": dead,
+                   "state": state_name},
         "room": {"name": room, "completed": False},
     })
 
@@ -265,3 +266,64 @@ def test_a_reported_count_wins_over_the_room_clock():
 
     assert report.status == "ABORTED"
     assert report.at_frame == 5
+
+
+def test_a_wall_grab_counts_as_its_own_landing():
+    # Room 8's TAS arc ends holding a wall. At the same coordinates, the floor
+    # and the wall face are different places to plan the next step from.
+    executor = ExecutorAgent(None, None)
+    ok = Success(x=(100.0, 100.0), y=(-1128.0, -1128.0), stance="climb")
+
+    assert executor.success_reason(StepContract(ok=ok),
+                                  state(100.0, on_ground=False, state_name="StClimb")) is None
+    assert executor.success_reason(StepContract(ok=ok),
+                                  state(100.0, on_ground=False, state_name="StNormal")) == "not_climbing"
+    assert executor.success_reason(StepContract(ok=ok), state(100.0, state_name="StNormal")) == "not_climbing"
+
+
+def test_the_same_spot_reads_differently_by_stance():
+    executor = ExecutorAgent(None, None)
+    ok = Success(x=(100.0, 100.0), y=(-1128.0, -1128.0), stance="ground")
+    contract = StepContract(ok=ok)
+
+    assert executor.success_reason(contract, state(100.0)) is None
+    assert executor.success_reason(
+        contract, state(100.0, on_ground=False, state_name="StClimb")) == "not_grounded"
+    airborne = Success(x=(100.0, 100.0), y=(-1128.0, -1128.0), stance="air")
+    assert executor.success_reason(StepContract(ok=airborne),
+                                  state(100.0, on_ground=False, vy=-90.0)) is None
+
+
+def test_a_blind_snapshot_says_so_instead_of_guessing():
+    # A 0.3.4 bridge reports on_ground but not the state machine, so it cannot
+    # tell a wall from a fall. Saying "not climbing" there would be a guess.
+    executor = ExecutorAgent(None, None)
+    contract = StepContract(ok=Success(stance="climb"))
+    assert executor.success_reason(contract, state(on_ground=False)) == "stance_unknown"
+
+
+def test_a_contract_without_a_stance_keeps_the_old_behaviour():
+    executor = ExecutorAgent(None, None)
+    ok = Success(x=(100.0, 100.0))
+
+    assert ok.stance is None
+    assert executor.success_reason(StepContract(ok=ok),
+                                  state(100.0, on_ground=False, state_name="StClimb")) is None
+
+
+def test_a_stance_that_contradicts_on_ground_is_refused():
+    assert Success(on_ground=False, stance="climb").stance == "climb"
+    assert Success(on_ground=True, stance="ground").stance == "ground"
+    with pytest.raises(ValueError):
+        Success(on_ground=True, stance="climb")
+    with pytest.raises(ValueError):
+        Success(on_ground=False, stance="ground")
+
+
+def test_an_old_snapshot_without_a_state_name_still_parses():
+    player = PlayerState.model_validate({
+        "x": 0, "y": 0, "vx": 0, "vy": 0, "on_ground": False,
+        "dashes": 1, "stamina": 110, "dead": False})
+    assert player.state == ""
+    assert player.stance() == "air"
+    assert PlayerState(on_ground=True).stance() == "ground"
