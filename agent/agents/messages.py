@@ -10,7 +10,7 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
-from agent.protocol import ActionSequence, FrameAction, GameState, Schema
+from agent.protocol import ActionSequence, Deviation, FrameAction, GameState, Schema
 
 Band = tuple[float, float]
 
@@ -155,6 +155,11 @@ class StepReport(Schema):
     start: GameState = Field(default_factory=GameState)
     end: GameState | None = None
     trace: list[TraceRow] = Field(default_factory=list)
+    # Where the step left the arc it was sent with, if it was sent with one.
+    deviation: Deviation | None = None
+    # Per-frame positions the bridge recorded while running, which is what
+    # turns a landed step into a route that can be replayed frame by frame.
+    positions: list[list[float]] = Field(default_factory=list)
 
     @property
     def settled(self) -> bool:
@@ -199,6 +204,9 @@ class Anchor(Schema):
     frozen: bool = False
     geometry: dict | None = None
     platforms: dict | None = None
+    # Entity types in the room, so the planner can be told the mechanics that
+    # actually apply here instead of every mechanic the game has.
+    entities: list[str] | None = None
 
 
 class PlannedStep(Schema):
@@ -210,10 +218,21 @@ class PlannedStep(Schema):
     goal: str = ""
     reason: str = ""
     latency: float = 0.0
+    # A recorded arc to stay on. It is not a success condition: leaving it
+    # aborts the step at that frame, which is cheaper than finishing an arc
+    # that no longer describes this room.
+    expect: list[list[float] | None] | None = None
+    tolerance: float = Field(default=1.0, ge=0, le=64)
 
     @property
     def frames(self) -> int:
         return sum(action.frames for action in self.actions)
+
+    @model_validator(mode="after")
+    def expect_fits(self):
+        if self.expect is not None and len(self.expect) > self.frames:
+            raise ValueError("expect rows exceed planned frames")
+        return self
 
 
 class PlanFailure(Schema):

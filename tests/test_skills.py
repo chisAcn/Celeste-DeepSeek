@@ -119,6 +119,86 @@ def test_a_landing_restores_a_route_that_was_missing():
     assert book.entries[0].streak == 0
 
 
+def test_a_landed_step_keeps_the_frames_it_actually_flew():
+    book = SkillBook()
+    positions = [[100.0 + index, -1000.0] for index in range(12)]
+
+    assert book.note(outcome("LANDED", positions=positions)) == "learned-1"
+
+    assert book.entries[0].trace == [[round(x, 1), y] for x, y in positions]
+    assert book.entries[0].expected_from(state()) is not None
+
+
+def test_a_partial_capture_is_not_kept_as_an_arc():
+    book = SkillBook()
+
+    # Four positions for twelve frames means the step stopped early; replaying
+    # that arc would stop the next attempt where this one stopped.
+    book.note(outcome("LANDED", positions=[[100.0, -1000.0]] * 4))
+
+    assert book.entries[0].trace is None
+
+
+def test_the_recorded_arc_moves_to_where_the_anchor_stands():
+    entry = route(x=100.0, frames=3)
+    entry.trace = [[100.0, -1000.0], [102.0, -1002.0], [104.0, -1004.0]]
+
+    assert entry.expected_from(state(x=102.0)) == [[102.0, -1000.0],
+                                                   [104.0, -1002.0],
+                                                   [106.0, -1004.0]]
+
+
+def test_a_route_without_an_arc_has_nothing_to_check():
+    assert route().expected_from(state()) is None
+
+
+def test_the_planner_tries_the_book_before_asking_the_model():
+    calls = []
+
+    async def plan(context):
+        calls.append(context)
+        return Plan([FrameAction(buttons=["jump"], frames=6)])
+
+    planner = PlannerAgent(plan)
+    planner.book.add(route())
+    planner.record(outcome("MISSED", actions=[FrameAction(buttons=["jump"], frames=4)]))
+
+    step = serve_once(planner, state(x=100.5))
+
+    assert step.goal == "retry hop"
+    assert not calls
+    assert planner.plans == 0 and planner.retry.retries == 1
+
+
+def test_when_the_book_has_nothing_left_the_model_is_asked():
+    calls = []
+
+    async def plan(context):
+        calls.append(context)
+        return Plan([FrameAction(buttons=["jump"], frames=6)])
+
+    planner = PlannerAgent(plan)
+    planner.book.add(route())
+    planner.record(outcome("MISSED", actions=[FrameAction(buttons=["right"], frames=12)]))
+
+    step = serve_once(planner, state(x=100.5))
+
+    # The only route here is the one that just missed; replaying it again is
+    # how a failure becomes a loop, so the model gets the question instead.
+    assert step.goal == "improvised" and len(calls) == 1
+
+
+def test_a_landing_puts_the_book_back_in_charge():
+    planner = PlannerAgent(lambda context: None)
+    planner.book.add(route())
+    planner.record(outcome("MISSED", actions=[FrameAction(buttons=["jump"], frames=4)]))
+    planner.record(outcome("LANDED"))
+
+    step = serve_once(planner, state(x=100.5))
+
+    assert step.goal == "replay hop"
+
+
 def test_the_planner_replays_without_asking_the_model():
     def refuse(context):
         raise AssertionError("a matched anchor must not reach the model")

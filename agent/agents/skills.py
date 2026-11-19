@@ -52,6 +52,11 @@ class Replay:
     misses: int = 0
     streak: int = 0
     origin: str = "session"
+    # Where she was after each frame, recorded while the route ran. Replaying
+    # with it turns the macro into a frame-by-frame promise: the bridge stops
+    # at the first frame that leaves the arc, instead of finishing it into
+    # whatever happens to be at the end.
+    trace: list[list[float]] | None = None
 
     @property
     def frames(self) -> int:
@@ -66,6 +71,22 @@ class Replay:
         return math.inf if player is None else max(abs(player.x - self.x),
                                                    abs(player.y - self.y))
 
+    def expected_from(self, state: GameState) -> list[list[float] | None] | None:
+        """The recorded arc, moved to where this anchor actually stands.
+
+        Matching allows a 2px start offset, so replaying the raw arc would trip
+        a per-frame check on its first frame. Translation is exactly what a
+        grounded body differs by here, so the whole arc moves with it; a room
+        that is not translation-invariant at that scale shows up as a deviation
+        a few frames later, which is the honest answer.
+        """
+        player = state.player
+        if not self.trace or player is None:
+            return None
+        dx, dy = player.x - self.x, player.y - self.y
+        rows = [[round(x + dx, 1), round(y + dy, 1)] for x, y in self.trace[:self.frames]]
+        return rows or None
+
     def hint(self) -> dict:
         row = {
             "name": self.name,
@@ -79,6 +100,8 @@ class Replay:
         if self.end_x is not None:
             row["end"] = [round(self.end_x, 1),
                           None if self.end_y is None else round(self.end_y, 1)]
+        if self.trace:
+            row["traced_frames"] = len(self.trace)
         return row
 
     def to_dict(self) -> dict:
@@ -97,6 +120,8 @@ class Replay:
         if self.end_x is not None:
             row["end"] = [round(self.end_x, 1),
                           None if self.end_y is None else round(self.end_y, 1)]
+        if self.trace:
+            row["trace"] = [[round(x, 1), round(y, 1)] for x, y in self.trace]
         return row
 
     @classmethod
@@ -114,6 +139,15 @@ class Replay:
         if not actions:
             raise ValueError("route has no actions")
         end = row.get("end") or []
+        trace = row.get("trace")
+        frames = sum(action.frames for action in actions)
+        if trace is not None:
+            if not isinstance(trace, list) or len(trace) > frames:
+                raise ValueError("route trace does not match its frames")
+            for point in trace:
+                if len(point) != 2:
+                    raise ValueError("route trace row needs two coordinates")
+            trace = [[float(point[0]), float(point[1])] for point in trace]
         return cls(name=str(row["name"]), room=str(row["room"]),
                    x=float(start[0]), y=float(start[1]),
                    dashes=int(row.get("dashes", 0)), actions=actions,
@@ -121,7 +155,7 @@ class Replay:
                    end_y=None if len(end) < 2 or end[1] is None else float(end[1]),
                    hits=int(row.get("hits", 0)), misses=int(row.get("misses", 0)),
                    streak=int(row.get("streak", 0)),
-                   origin=str(row.get("origin", "disk")))
+                   origin=str(row.get("origin", "disk")), trace=trace)
 
     @classmethod
     def from_skill(cls, skill) -> "Replay | None":
@@ -138,6 +172,20 @@ class Replay:
                    end_y=None if end is None or end.player is None else end.player.y,
                    hits=skill.successes, misses=len(skill.failures),
                    origin="memory")
+
+
+def _trace_of(report, actions) -> list[list[float]] | None:
+    """Per-frame positions, but only when they cover the whole macro.
+
+    A short capture means the step stopped early, and replaying a partial arc
+    would stop the next attempt where this one stopped -- the opposite of a
+    route. Positions arrive rounded to the same tenth the book stores.
+    """
+    if report is None or not report.positions:
+        return None
+    if len(report.positions) != sum(action.frames for action in actions):
+        return None
+    return [[round(point[0], 1), round(point[1], 1)] for point in report.positions]
 
 
 @dataclass
@@ -190,6 +238,7 @@ class SkillBook:
         actions = list(outcome.actions or (report.actions if report else []))
         entry = self._index.get(_key(start.room.name, start.player.x, start.player.y, actions))
         landed = outcome.verdict == "LANDED"
+        trace = _trace_of(report, actions)
 
         if entry is not None:
             if landed:
@@ -199,6 +248,9 @@ class SkillBook:
                 if settled is not None and settled.player is not None:
                     entry.end_x = settled.player.x
                     entry.end_y = settled.player.y
+                # A fresh landing is also the best arc we have: it was recorded
+                # on this build, in this room, from this spot.
+                entry.trace = trace or entry.trace
             else:
                 entry.misses += 1
                 entry.streak += 1
@@ -213,7 +265,7 @@ class SkillBook:
                                    room=start.room.name,
                                    x=start.player.x, y=start.player.y,
                                    dashes=start.player.dashes,
-                                   actions=actions,
+                                   actions=actions, trace=trace,
                                    end_x=settled.player.x, end_y=settled.player.y))
         return None if promoted is None else promoted.name
 

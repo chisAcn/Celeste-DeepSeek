@@ -15,6 +15,7 @@ from agent.agents.messages import (
     TraceRow,
 )
 from agent.agents.planner import PlannerAgent
+from agent.agents.retry import LocalRetry
 from agent.agents.standby import Standby
 from agent.agents.team import Stats, TeamSession
 
@@ -22,6 +23,7 @@ __all__ = [
     "Abort",
     "Anchor",
     "ExecutorAgent",
+    "LocalRetry",
     "PlanFailure",
     "PlannedStep",
     "PlannerAgent",

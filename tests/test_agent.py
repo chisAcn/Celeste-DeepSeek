@@ -105,7 +105,9 @@ def test_deepseek_playtest(monkeypatch, tmp_path):
     content = request["messages"][1]["content"]
     assert '"mock-flat"' in content
     assert "movement_reference" in json.loads(content)
-    assert "Dash: 240 px/s" in json.loads(content)["movement_reference"]
+    reference = json.loads(content)["movement_reference"]
+    assert "DASH. 240 px/s" in reference
+    assert "27 px" in reference  # the jump apex that room 7 got wrong
     event = json.loads(Path("logs/decisions.jsonl").read_text(encoding="utf-8"))
     assert event["result"]["executed_frames"] == 30
 

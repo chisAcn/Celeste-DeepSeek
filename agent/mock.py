@@ -3,6 +3,7 @@ import json
 
 from agent.protocol import (
     ActionSequence,
+    Deviation,
     ExecutionResult,
     GameState,
     PlatformSample,
@@ -55,6 +56,9 @@ class MockBridge:
         before = self.state.model_copy(deep=True)
         count = 0
         checkpoints = []
+        positions = []
+        deviation = None
+        status = "completed"
         try:
             for action in seq.actions:
                 self.held = set(action.buttons)
@@ -65,22 +69,44 @@ class MockBridge:
                     self.state.player.x += self.state.player.vx / 60
                     if self.state.player.x >= 100:
                         self.state.room.completed = True
+                    if seq.capture_positions:
+                        positions.append([round(self.state.player.x, 1),
+                                          round(self.state.player.y, 1)])
                     if seq.trace_frames:
                         sample = self.state.model_copy(deep=True)
                         if seq.trace_platforms:
                             sample.platform_sample = PlatformSample(platforms=[], total=0)
                         checkpoints.append(sample)
+                    # Same contract as the real bridge: the frame that leaves
+                    # the arc ends the job, and the frames after it never run.
+                    if (seq.expect is not None and count <= len(seq.expect)
+                            and seq.expect[count - 1] is not None):
+                        want = seq.expect[count - 1]
+                        offset_x = abs(self.state.player.x - want[0])
+                        offset_y = abs(self.state.player.y - want[1])
+                        if offset_x > seq.tolerance or offset_y > seq.tolerance:
+                            deviation = Deviation(
+                                frame=count, index=count, expected=list(want),
+                                actual=[round(self.state.player.x, 1),
+                                        round(self.state.player.y, 1)],
+                                offset=[round(offset_x, 1), round(offset_y, 1)],
+                                tolerance=seq.tolerance)
+                            status = "deviated"
+                            break
                     if self.state.room.completed:
                         break
-                if self.state.room.completed:
+                if status != "completed" or self.state.room.completed:
                     break
         finally:
             self.held.clear()
-        result = ExecutionResult(execution_id=seq.execution_id, status="completed",
+        excluded = set() if seq.trace_frames else {"checkpoints"}
+        if deviation is None:
+            excluded.add("deviation")
+        result = ExecutionResult(execution_id=seq.execution_id, status=status,
                                  executed_frames=count, before=before,
                                  after=self.state.model_copy(deep=True),
-                                 checkpoints=checkpoints).model_dump(
-                                     exclude=set() if seq.trace_frames else {"checkpoints"})
+                                 checkpoints=checkpoints, deviation=deviation,
+                                 positions=positions).model_dump(exclude=excluded)
         self.results[seq.execution_id] = result
         return result
 

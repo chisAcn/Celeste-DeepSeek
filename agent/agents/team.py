@@ -53,6 +53,7 @@ class Stats:
     superseded: int = 0
     rejected: int = 0
     plan_failures: int = 0
+    deviations: int = 0
     standby_seconds: float = 0.0
     frozen_seconds: float = 0.0
     freezes: int = 0
@@ -105,6 +106,7 @@ class TeamSession:
         self._unstable_since: float | None = None
         self._frozen_since: float | None = None
         self._geometry: dict[str, dict | None] = {}
+        self._entities: dict[str, list[str] | None] = {}
         self._telemetry = True
         self._log: list[dict] = []
 
@@ -215,9 +217,11 @@ class TeamSession:
     async def _publish(self, state, *, still_for=0.0, frozen=False) -> Anchor:
         self._counter += 1
         geometry = await self._room_geometry(state.room.name)
+        entities = await self._room_entities(state.room.name)
         platforms = await self._platforms() if self.option.telemetry and self._telemetry else None
         anchor = Anchor(id=self._counter, state=state, still_for=round(still_for, 2),
-                        frozen=frozen, geometry=geometry, platforms=platforms)
+                        frozen=frozen, geometry=geometry, platforms=platforms,
+                        entities=entities)
         self.stats.anchors += 1
         player = state.player
         self.event({"state": "ANCHOR", "anchor": anchor.id, "frozen": frozen,
@@ -326,7 +330,8 @@ class TeamSession:
     async def _execute(self, anchor: Anchor, step: PlannedStep):
         sequence = ActionSequence(
             execution_id=f"anchor{anchor.id}-{uuid.uuid4().hex[:6]}",
-            actions=step.actions)
+            actions=step.actions, expect=step.expect, tolerance=step.tolerance,
+            capture_positions=True)
         try:
             report = await self.executor.run(sequence, step.contract)
         except RuntimeError as error:
@@ -356,12 +361,17 @@ class TeamSession:
 
         if verdict == "LANDED":
             self.stats.landed += 1
+        if report.deviation is not None:
+            self.stats.deviations += 1
         self.event({"step": self.stats.steps, "state": "VERIFY", "anchor": anchor.id,
                     "plan": {"goal": step.goal, "reason": step.reason,
                              "actions": [a.model_dump() for a in step.actions],
-                             "latency": step.latency},
+                             "latency": step.latency,
+                             "expect": None if step.expect is None else len(step.expect)},
                     "verdict": verdict, "verified": verdict == "LANDED",
                     "detail": detail, "frames": report.executed_frames,
+                    "deviation": (None if report.deviation is None
+                                  else report.deviation.model_dump()),
                     "settled": _point(settled)})
         outcome = StepOutcome(verdict=verdict, report=report, actions=step.actions,
                               settled=settled, detail=detail)
@@ -428,6 +438,25 @@ class TeamSession:
             geometry = None
         self._geometry[room] = geometry
         return geometry
+
+    async def _room_entities(self, room: str) -> list[str] | None:
+        """Entity type names in the room, cached per room.
+
+        Only the types are kept: they decide which mechanic hints the planner is
+        sent, and the prompt is the scarce resource. A room that cannot be
+        scanned simply gets no hints and the model falls back on the probes it
+        can still ask for.
+        """
+        if room in self._entities:
+            return self._entities[room]
+        try:
+            payload = await self.executor.call("get_entities", whole_room=True)
+        except Exception:  # noqa: BLE001 - hints are optional
+            payload = None
+        rows = (payload or {}).get("entities") or []
+        types = sorted({str(row.get("type")) for row in rows if row.get("type")})
+        self._entities[room] = types[:24] or None
+        return self._entities[room]
 
     async def _platforms(self) -> dict | None:
         try:

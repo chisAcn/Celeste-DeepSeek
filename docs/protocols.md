@@ -15,6 +15,23 @@ Real execute_frames returns execution_id and status=running immediately. Poll ge
 
 The updated bridge advertises `playability` and `frame_checkpoints` in `ping`. Call `get_playability` to check the same eligibility predicate used to accept input. Pass `trace_frames: true` with at most 120 requested frames to receive one post-update `checkpoints` entry per executed frame. Regular executions keep their existing response shape. These are real-time Level.Update samples of observable state. The bridge reports `tas: false` and `state_restore: false`.
 
+### Per-frame expectations (0.3.4)
+
+`execute_frames` also accepts `expect`, `tolerance` and `capture_positions`. `expect` is one row per frame, either `null` (do not check) or `[x, y]` in the same units as `get_state().player`; it may be shorter than the plan, which leaves the tail unchecked. `tolerance` is in pixels, default 1, range 0-64. The check runs inside the tick that applied the frame, immediately after `Level.Update`, so the answer is frame-accurate rather than poll-accurate.
+
+The first frame that leaves the band ends the job with `status: "deviated"` and the terminal record carries:
+
+```json
+"deviation": {"frame": 12, "index": 12, "expected": [2719.0, -1704.0],
+              "actual": [2731.0, -1700.0], "offset": [12.0, 4.0], "tolerance": 1.5}
+```
+
+`frame` and `index` are 1-based and line up with `executed_frames`. Frames after the deviation never run: that is the point of checking in the bridge instead of after the step. Death, room change and transition still win over a deviation, because those already explain the frame.
+
+With `capture_positions: true` the terminal record also carries `positions`, one `[x, y]` per applied frame. It is much cheaper than `checkpoints` and is what lets a landed step be replayed frame by frame: the recorded arc becomes the expectation of the next attempt, shifted by whatever start offset the anchor allowed.
+
+Both keys are optional and older bridges ignore unknown ones, so a client can always send them; `ping` advertises `expect` and `positions` when the build supports them.
+
 Polling caveat, confirmed live on 0.3.2 and fixed in 0.3.3: on 0.3.2, while a job is running, `get_execution` returned only `execution_id` and `status` -- `executed_frames` was written by `Finish`, so it read as zero for the whole step, and a supervisor aborting on a frame budget was blind. The room counter (`get_state().frame`) advances on exactly the `Level.Update` that applies one input set, so a client can count that way; the Python client uses it as a fallback. 0.3.3 writes `executed_frames` into the running record on every tick, and the client prefers that number whenever the key is present, so the fallback only applies to older bridges. `stop` is dequeued on the next `Engine.Update`, so an abort decided at frame N reports N applied frames plus the one in flight -- that overshoot is inherent, not a client bug.
 
 After installing the rebuilt DLL and restarting Celeste, enter room 1 and run `python -m agent.replay --output logs/diagonal-replay.jsonl`. The control is eight frames of up+right+dash. The report requires displacement, a consumed dash and three matching replays. When tracing is available it identifies the first differing frame.

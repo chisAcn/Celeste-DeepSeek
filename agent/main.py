@@ -385,6 +385,7 @@ async def run_collab(client, mode, *, steps=12, skills=None, exit_room=None,
 
         stats = session.stats.summary()
         stats["planner_replays"] = planner.replays
+        stats["local_retries"] = planner.retry.retries
         stats["routes"] = len(planner.book)
         stats["routes_book"] = origin
         stats["routes_dropped"] = dropped

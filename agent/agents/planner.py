@@ -25,8 +25,9 @@ from agent.agents.messages import (
     StepOutcome,
     Success,
 )
+from agent.agents.retry import LocalRetry
 from agent.agents.skills import Replay, SkillBook
-from agent.knowledge import MOVEMENT_REFERENCE
+from agent.knowledge import MOVEMENT_REFERENCE, mechanisms_reference
 from agent.protocol import ActionSequence, GameState
 from agent.tas_training import action_key
 
@@ -65,7 +66,7 @@ class PlannerAgent:
                  action_prior=None, history: int = 3, timeout: float = 60.0,
                  slack: int = 30, position_slack: float = 2.0,
                  frozen_slack: float = 8.0, book: SkillBook | None = None,
-                 replay: bool = True):
+                 replay: bool = True, expect_tolerance: float = 1.5):
         self.plan_fn = plan_fn
         self.skills = list(skills or [])
         self.exit_room = exit_room
@@ -77,12 +78,18 @@ class PlannerAgent:
         self.position_slack = position_slack
         self.frozen_slack = frozen_slack
         self.replay_enabled = replay
+        self.expect_tolerance = expect_tolerance
         self.replays = 0
         self.book = book if book is not None else SkillBook()
         for skill in self.skills:
             entry = Replay.from_skill(skill)
             if entry is not None:
                 self.book.add(entry)
+        # Second attempts come before the model: a route that already worked
+        # from within reach is cheaper than any prompt.
+        self.retry = LocalRetry(self.book, slack=self.slack,
+                                tolerance=self.expect_tolerance,
+                                position_slack=self.position_slack)
         self.history: list[dict] = []
         self.previous_action: str | None = None
         self.plans = 0
@@ -124,6 +131,14 @@ class PlannerAgent:
                 "of improvising. Chain skills through their endpoint positions.")
         if anchor.platforms:
             context["platforms"] = anchor.platforms
+        mechanisms = mechanisms_reference(anchor.entities)
+        if mechanisms:
+            context["room_mechanisms"] = mechanisms
+            context["mechanism_guidance"] = (
+                "room_mechanisms are the rules for the entity types in this room "
+                "only. They override a guess: a spike kills by direction of "
+                "travel, a spring refills the dash. Where a number here conflicts "
+                "with movement_reference, movement_reference wins.")
         geometry = anchor.geometry or {}
         if geometry.get("exits"):
             context["room_geometry"] = geometry
@@ -194,6 +209,14 @@ class PlannerAgent:
         }
         if report is not None and report.trace:
             row["trace"] = _thin(report.trace)
+        if report is not None and report.deviation is not None:
+            # The frame where the arc stopped fitting is the most actionable
+            # number in the whole report: it says how far the room has moved
+            # away from what the plan assumed.
+            row["deviation"] = {"frame": report.deviation.frame,
+                                "expected": report.deviation.expected,
+                                "actual": report.deviation.actual}
+        self.retry.note(outcome)
         self.history.append(row)
         del self.history[:-24]
         if outcome.actions:
@@ -215,6 +238,10 @@ class PlannerAgent:
         The contract is the route's promise: it begins where the anchor stands,
         and it has to land back within a few pixels of where it landed last time.
         A miss is not something to hide -- it is what demotes the route.
+
+        If the route was recorded with per-frame positions, they ride along as
+        an arc: the bridge stops on the first frame that leaves it, so a route
+        that no longer fits this room costs a few frames instead of a death.
         """
         ok = Success()
         if replay.end_x is not None:
@@ -226,7 +253,9 @@ class PlannerAgent:
             ok=ok, abort=Abort(timeout_frames=replay.frames + self.slack))
         return PlannedStep(anchor_id=anchor.id, actions=list(replay.actions),
                            contract=contract, goal=f"replay {replay.name}",
-                           reason="a route that already ran starts exactly here")
+                           reason="a route that already ran starts exactly here",
+                           expect=replay.expected_from(anchor.state),
+                           tolerance=self.expect_tolerance)
 
     # -- the task --------------------------------------------------------
 
@@ -239,7 +268,16 @@ class PlannerAgent:
                 self.drain(outcomes)
                 continue
             self.drain(outcomes)
-            replay = self.book.match(anchor.state) if self.replay_enabled else None
+            if self.replay_enabled:
+                retry = self.retry.offer(anchor)
+                if retry is not None:
+                    await _latest(plans, retry)
+                    continue
+            # While recovering, only the retrier picks routes: replaying the one
+            # that just missed from the same anchor is how a failure becomes a
+            # loop.
+            replay = (self.book.match(anchor.state)
+                      if self.replay_enabled and not self.retry.recovering else None)
             if replay is not None:
                 self.replays += 1
                 await _latest(plans, self._replay_step(anchor, replay))

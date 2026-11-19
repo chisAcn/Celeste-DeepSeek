@@ -59,6 +59,13 @@ class ActionSequence(Schema):
     actions: list[FrameAction] = Field(min_length=1, max_length=64)
     trace_frames: bool = False
     trace_platforms: bool = False
+    # Per-frame expected position, checked inside the tick that applied the
+    # frame. ``None`` skips a frame, so a recorded arc can be shorter than the
+    # plan that uses it. This is what lets a long macro stop on the exact frame
+    # it leaves its route instead of running into whatever is at the end.
+    expect: list[list[float] | None] | None = None
+    tolerance: float = Field(default=1.0, ge=0, le=64)
+    capture_positions: bool = False
 
     @model_validator(mode="after")
     def bounded(self):
@@ -69,16 +76,40 @@ class ActionSequence(Schema):
             raise ValueError("trace exceeds 120 frames")
         if total > 600:
             raise ValueError("sequence exceeds 600 frames")
+        if self.expect is not None:
+            if len(self.expect) > total:
+                raise ValueError("expect rows exceed frames")
+            for row in self.expect:
+                if row is not None and (len(row) != 2
+                                        or not all(isinstance(v, (int, float)) for v in row)):
+                    raise ValueError("expect rows are null or [x, y]")
         return self
+
+
+class Deviation(Schema):
+    """Where a step left its expected arc, as the bridge measured it.
+
+    ``frame`` is 1-based: it is the frame of the step that first went off, so
+    it lines up with ``executed_frames`` and with the trace.
+    """
+
+    frame: int
+    index: int = 0
+    expected: list[float]
+    actual: list[float] | None = None
+    offset: list[float] | None = None
+    tolerance: float = 1.0
 
 
 class ExecutionResult(Schema):
     execution_id: str
-    status: Literal["completed", "interrupted"]
+    status: Literal["completed", "interrupted", "deviated"]
     executed_frames: int
     before: GameState
     after: GameState
     checkpoints: list[GameState] = Field(default_factory=list, max_length=120)
+    deviation: Deviation | None = None
+    positions: list[list[float]] = Field(default_factory=list, max_length=600)
 
 
 class Request(Schema):

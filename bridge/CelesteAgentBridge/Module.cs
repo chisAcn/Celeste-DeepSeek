@@ -36,6 +36,14 @@ public sealed class Module : EverestModule {
         public bool TracePlatforms;
         public Guid Owner;
         public int Index, Remaining, Count;
+        // Per-frame expectations, in the same units as the snapshot's player x/y.
+        // They are checked inside the tick that applied the frame, so a step that
+        // leaves its recorded arc stops on the exact frame instead of running the
+        // remaining frames into a spike.
+        public List<Vector2?>? Expect;
+        public float Tolerance = 1f;
+        public List<Vector2>? Positions;
+        public JsonObject? Deviation;
     }
     public override void Load() {
         lifetime = new();
@@ -105,6 +113,7 @@ public sealed class Module : EverestModule {
                 ["player_probe"]=true, ["level_probe"]=true, ["room_structure"]=true,
                 ["entities"]=true, ["collision"]=true, ["tiles"]=true,
                 ["capture"]=true, ["menu"]=true, ["save"]=true, ["trajectory"]=true,
+                ["expect"]=true, ["positions"]=true,
                 ["mod_version"]=Metadata.Version.ToString()
             };
             case "get_state": return snapshot.DeepClone();
@@ -225,6 +234,10 @@ public sealed class Module : EverestModule {
                 bool tracePlatforms = p["trace_platforms"]?.GetValue<bool>() ?? false;
                 if (tracePlatforms && !trace) throw new ArgumentException("platform traces require trace_frames");
                 if(trace && total>120) throw new ArgumentException("trace exceeds 120 frames");
+                var expect = ParseExpect(p["expect"], total);
+                float tolerance = p["tolerance"]?.GetValue<float>() ?? 1f;
+                if (float.IsNaN(tolerance) || tolerance is < 0 or > 64) throw new ArgumentException("tolerance");
+                bool capturePositions = p["capture_positions"]?.GetValue<bool>() ?? false;
                 if (restore) {
                     if (!SpeedrunInterop.Available || !SpeedrunInterop.TasIsSaved!(saveSlot))
                         throw new ArgumentException("bridge save slot unavailable or empty");
@@ -236,7 +249,8 @@ public sealed class Module : EverestModule {
                 }
                 var before = Observe(level);
                 if (tracePlatforms) before["platform_sample"] = PlatformObserver.Capture(level);
-                active = new Job { Id=id, Actions=(JsonArray)actions.DeepClone(), Before=before, Room=level.Session.Level, Owner=owner, Checkpoints=trace ? new JsonArray() : null, TracePlatforms=tracePlatforms };
+                active = new Job { Id=id, Actions=(JsonArray)actions.DeepClone(), Before=before, Room=level.Session.Level, Owner=owner, Checkpoints=trace ? new JsonArray() : null, TracePlatforms=tracePlatforms,
+                    Expect=expect, Tolerance=tolerance, Positions=capturePositions ? new List<Vector2>() : null };
                 executions[id] = new JsonObject { ["execution_id"]=id, ["status"]="running", ["executed_frames"]=0 };
                 return executions[id].DeepClone();
             default: throw new ArgumentException("unknown method");
@@ -285,7 +299,14 @@ public sealed class Module : EverestModule {
                 job.Checkpoints.Add(checkpoint);
             }
             var player=level.Tracker.GetEntity<Player>();
+            if(job.Positions != null && player != null) job.Positions.Add(new Vector2(player.X, player.Y));
             if(player == null || player.Dead || level.Session.Level != job.Room || level.Transitioning) Finish("interrupted");
+            // Deviation is judged before completion: a step that arrives at the
+            // last frame but somewhere else is not a completed step.
+            else if(OffExpectation(job, player, out var deviation)) {
+                job.Deviation = deviation;
+                Finish("deviated");
+            }
             else if(level.Completed || (job.Remaining==0 && ++job.Index>=job.Actions.Count)) Finish("completed");
         }
     }
@@ -340,7 +361,46 @@ public sealed class Module : EverestModule {
         input.Release();
         executions[job.Id]=new JsonObject { ["execution_id"]=job.Id, ["status"]=status, ["executed_frames"]=job.Count, ["before"]=job.Before.DeepClone(), ["after"]=snapshot.DeepClone() };
         if(job.Checkpoints != null) executions[job.Id]["checkpoints"]=job.Checkpoints;
+        if(job.Deviation != null) executions[job.Id]["deviation"]=job.Deviation;
+        if(job.Positions != null) {
+            var rows = new JsonArray();
+            foreach(var position in job.Positions) rows.Add(new JsonArray(JsonValue.Create(position.X), JsonValue.Create(position.Y)));
+            executions[job.Id]["positions"]=rows;
+        }
         active=null;
+    }
+    // One row per frame, or null for "do not check this frame". A plan may leave
+    // the tail unchecked, which is what lets a route that was recorded short be
+    // replayed with a longer plan.
+    static List<Vector2?>? ParseExpect(JsonNode? node, int total) {
+        if (node is not JsonArray array || array.Count == 0) return null;
+        if (array.Count > total) throw new ArgumentException("expect rows exceed frames");
+        var rows = new List<Vector2?>(array.Count);
+        foreach(var row in array) {
+            if (row is null) { rows.Add(null); continue; }
+            if (row is not JsonArray pair || pair.Count != 2) throw new ArgumentException("expect row needs x and y");
+            double x = pair[0]?.GetValue<double>() ?? throw new ArgumentException("expect x");
+            double y = pair[1]?.GetValue<double>() ?? throw new ArgumentException("expect y");
+            if (double.IsNaN(x) || double.IsNaN(y)) throw new ArgumentException("expect row");
+            rows.Add(new Vector2((float)x, (float)y));
+        }
+        return rows;
+    }
+    static bool OffExpectation(Job job, Player player, out JsonObject? deviation) {
+        deviation = null;
+        var expect = job.Expect;
+        int index = job.Count - 1;
+        if (expect == null || index < 0 || index >= expect.Count || expect[index] is not { } want) return false;
+        float dx = MathF.Abs(player.X - want.X), dy = MathF.Abs(player.Y - want.Y);
+        if (dx <= job.Tolerance && dy <= job.Tolerance) return false;
+        deviation = new JsonObject {
+            ["frame"]=job.Count, ["index"]=index + 1,
+            ["expected"]=new JsonArray(JsonValue.Create(want.X), JsonValue.Create(want.Y)),
+            ["actual"]=new JsonArray(JsonValue.Create(player.X), JsonValue.Create(player.Y)),
+            ["offset"]=new JsonArray(JsonValue.Create(dx), JsonValue.Create(dy)),
+            ["tolerance"]=job.Tolerance,
+        };
+        return true;
     }
     JsonObject Observe(Level level) {
         var p=level.Tracker.GetEntity<Player>();

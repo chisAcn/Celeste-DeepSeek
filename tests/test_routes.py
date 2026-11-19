@@ -165,6 +165,36 @@ def test_save_creates_the_directory_it_writes_into(tmp_path):
     assert json.loads(path.read_text(encoding="utf-8"))["routes"] == []
 
 
+def test_a_route_keeps_its_recorded_arc_across_a_save(tmp_path):
+    book = SkillBook()
+    entry = route()
+    entry.trace = [[100.0, -1000.0], [103.5, -1001.0], [108.0, -1002.5]]
+    book.add(entry)
+
+    loaded, skipped = load_book(save_book(book, tmp_path / "routes.json"))
+
+    assert skipped == 0
+    assert loaded.entries[0].trace == [[100.0, -1000.0], [103.5, -1001.0],
+                                       [108.0, -1002.5]]
+    assert loaded.entries[0].expected_from(state()) is not None
+
+
+def test_an_arc_longer_than_its_frames_is_a_bad_row(tmp_path):
+    row = route().to_dict()
+    row["trace"] = [[0.0, 0.0]] * 999  # 20 frames of actions
+    path = write(tmp_path, [row])
+
+    loaded, skipped = load_book(path)
+
+    assert len(loaded) == 0 and skipped == 1
+
+
+def test_a_route_without_an_arc_still_loads(tmp_path):
+    loaded, skipped = load_book(write(tmp_path, [route().to_dict()]))
+
+    assert skipped == 0 and loaded.entries[0].trace is None
+
+
 def test_a_promoted_route_gets_a_name_no_other_route_carries():
     from agent.agents.messages import StepOutcome, StepReport, TraceRow
 

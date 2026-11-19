@@ -208,6 +208,13 @@ class ExecutorAgent:
         if stopped is not None:
             reason = stopped
             status = "DIED" if end.player is not None and end.player.dead else "ABORTED"
+        elif result is not None and result.status == "deviated":
+            # The bridge compared every frame against the recorded arc and
+            # stopped on the first one that left it. That is not the plan being
+            # wrong about the landing; it is the arc not describing this room
+            # any more, which is worth saying in those words.
+            status = "ABORTED"
+            reason = "deviated"
         elif result is not None and result.status == "interrupted":
             died = end.player is not None and end.player.dead
             reason = "dead" if died else "bridge_interrupted"
@@ -216,6 +223,11 @@ class ExecutorAgent:
             failure = self.success_reason(contract, end)
             reason = failure
             status = "SUCCEEDED" if failure is None else "UNSATISFIED"
+
+        deviation = None if result is None else result.deviation
+        at_frame = stopped_at if status in {"ABORTED", "DIED"} else None
+        if at_frame is None and deviation is not None:
+            at_frame = deviation.frame
 
         # The landing frame is the one a route is judged on, and it arrives
         # between polls, so it is appended rather than sampled.
@@ -227,5 +239,6 @@ class ExecutorAgent:
                           execution_id=sequence.execution_id,
                           actions=list(sequence.actions),
                           planned_frames=planned, executed_frames=executed,
-                          at_frame=stopped_at if status in {"ABORTED", "DIED"} else None,
-                          contract=contract, start=start, end=end, trace=trace)
+                          at_frame=at_frame, contract=contract, start=start,
+                          end=end, trace=trace, deviation=deviation,
+                          positions=[] if result is None else result.positions)
