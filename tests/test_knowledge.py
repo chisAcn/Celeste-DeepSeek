@@ -53,3 +53,13 @@ def test_every_mechanic_has_a_type_and_a_hint():
     for key, entry in MECHANICS.items():
         assert entry["types"] and entry["hint"], key
         assert len(entry["hint"]) < 600, key  # the prompt is the scarce resource
+
+
+def test_the_dash_aim_frame_is_spelled_out():
+    # Room 8: the direction is read after the freeze, not on the press, so a
+    # plan that drops it for that one frame dashes along facing instead. The
+    # super/hyper pair is what a jump during that window buys.
+    assert "first frame after the freeze" in MOVEMENT_REFERENCE
+    assert "hold the direction past the press" in MOVEMENT_REFERENCE
+    assert "(260, -105)" in MOVEMENT_REFERENCE  # super, grounded
+    assert "(325, -52.5)" in MOVEMENT_REFERENCE  # hyper, ducking

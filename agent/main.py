@@ -9,6 +9,7 @@ from agent.agents import ExecutorAgent, PlannerAgent, StepContract, TeamSession
 from agent.agents.planner import skill_hint
 from agent.agents.routes import LEARNED, open_book, save_book
 from agent.agents.skills import SkillBook
+from agent.aims import repair
 from agent.client import BridgeClient
 from agent.codex_play import CodexPlanner, CodexPlayError
 from agent.kb import DEFAULT_BUDGET, DEFAULT_ROOT, GUIDANCE, KnowledgeBase, terms_for
@@ -252,8 +253,11 @@ async def run(client, mode, steps=20, action_prior=None, *, settle=False, exit_r
                 plan = Plan(goal="mock exit", reason="flat fixture", actions=[
                     FrameAction(buttons=["right"], frames=30)],
                     expected_x_min=state.player.x + 1, expected_x_max=100)
+            # A dash aim the chunking would drop before the freeze ends is held
+            # for the one frame the game reads it on. Counted, not silent.
+            actions, aim_notes = repair(plan.actions)
             try:
-                seq = ActionSequence(execution_id=str(uuid.uuid4()), actions=plan.actions)
+                seq = ActionSequence(execution_id=str(uuid.uuid4()), actions=actions)
             except ValueError as error:
                 if codex:
                     raise CodexPlayError("Codex action plan exceeds the bridge limits.") from error
@@ -261,9 +265,11 @@ async def run(client, mode, steps=20, action_prior=None, *, settle=False, exit_r
             # The planning state becomes the contract's precondition, so a stale
             # plan is refused before any frame is sent rather than judged after.
             contract = StepContract.for_plan(
-                plan.actions, expected_x=(plan.expected_x_min, plan.expected_x_max),
+                actions, expected_x=(plan.expected_x_min, plan.expected_x_max),
                 planned=state if mode in {"codex", "deepseek"} else None)
             observations = {}
+            if aim_notes:
+                observations["aim_fixes"] = aim_notes
             if mode in {"codex", "deepseek"}:
                 observations["planning_state"] = state.model_dump()
             if not await wait_playable(client):
@@ -402,6 +408,7 @@ async def run_collab(client, mode, *, steps=12, skills=None, exit_room=None,
         stats = session.stats.summary()
         stats["planner_replays"] = planner.replays
         stats["local_retries"] = planner.retry.retries
+        stats["aim_repairs"] = planner.aim_repairs
         stats["kb_sections"] = planner.kb_sections
         stats["routes"] = len(planner.book)
         stats["routes_book"] = origin

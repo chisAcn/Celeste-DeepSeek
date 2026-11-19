@@ -40,12 +40,21 @@ speed caps at 160 px/s, or 240 while down is held. Coyote time 6 frames after
 leaving the ground; a jump pressed up to 5 frames early still fires.
 
 DASH. 240 px/s along the unit direction, for 10 frames after 3 freeze frames
-(freeze frames do not advance the room). A straight dash covers 40 px, a
-diagonal 28.28 px per axis. Exit speed: horizontal (160, 0); up (0, -120);
-up-diagonal (113.14, -84.85) per axis; down directions keep their speed.
+(they advance neither the room nor an input frame). The direction is read on
+the first frame after the freeze, not on the press: a chunk that presses dash
+for one frame and then drops the direction dashes straight along facing, so
+hold the direction past the press. A straight dash covers 40 px, a diagonal
+28.28 px per axis. Exit speed: horizontal (160, 0); up (0, -120); up-diagonal
+(113.14, -84.85) per axis; down directions keep their speed.
 Cooldown 0.2 s between dash starts; the next dash is possible on frame 16.
 Dashes refill only while grounded, from the 7th normal frame after the dash
 began -- landing earlier still qualifies, standing still does not.
+
+SUPER / HYPER. A jump pressed during the dash (frames 4-14) cancels it into
+(260, -105) while grounded, or (325, -52.5) while ducking; either way the
+horizontal part is facing, not the aim. A jump pressed before the freeze ends
+fires the moment the freeze does. The in-dash refill still applies, so a super
+taken late enough in a grounded dash leaves a dash to follow it with.
 
 WALL. Walljump is (130, -105) away from the wall; it works with a gap of up to
 2 px, and forces the horizontal input away for 0.16 s. Wallbounce (a jump

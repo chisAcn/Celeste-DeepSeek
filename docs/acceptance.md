@@ -243,3 +243,37 @@ save slot, so the arcs are compared from an identical start rather than from
 One gap this leaves: the replay's contract still only asks for "within 6px of
 the recorded landing". The frame-by-frame promise is the `expect` array, and a
 route recorded without one can still run all its frames past a changed room.
+
+### The dash aim frame, live (2026-11-19)
+
+Same room, same savestate, same start `(2720, -1704)` on the floor of room 8.
+Each run is one `execute_frames` call with the trajectory recorder on, so the
+speeds below are per-tick readings from the game, not arithmetic.
+
+1. **The aim is read after the freeze, not on the press.** `[right+up+dash] x1`
+   followed by `[right+up] x14` gives `vx, vy = (169.70, -169.70)` for nine
+   consecutive `StDash` ticks -- a true up-right dash.
+2. **Dropping the direction for one frame flattens it.** The same press
+   followed by `[right + grab]` gives `(240, 0)`: horizontal. Nothing was
+   broken; the chunk that covers the aim frame simply did not say up. This is
+   the shape `agent/aims.py` now repairs, and the repaired version
+   (`[right+up+dash]`, `[right+up] x1`, `[right] x14`) reproduces `(169.70,
+   -169.70)` exactly.
+3. **Super fires, in both halves of the window.** A jump on the first tick
+   after the freeze and a jump eight ticks in both give `(260, -105)` in
+   `StNormal` -- `SuperJumpH` and `SuperJumpSpeed`. The late one also has a
+   dash in hand: the in-dash refill happened while she was still grounded.
+4. **Hyper fires.** Crouch dash (`down+right+dash`, then `down` held into the
+   jump) gives `(325, -52.5)` -- `SuperJumpH * DuckSuperJumpXMult` and
+   `SuperJumpSpeed * DuckSuperJumpYMult`.
+5. **The earlier "grab only climbs 3px" was geometry.** Holding grab on the
+   left wall enters `StClimb`, waits out `ClimbNoMoveTime` (six ticks of no
+   vertical movement), climbs 3.5 px to the top of the 8 px base and hops off
+   it with `vy -120` (`ClimbHopY`). The grab channel was never the problem.
+
+With super and an air dash both available, the right side of the pocket was
+re-tried: horizontal dash, super at `2748`, jump held, up-right dash at
+`-1712` reaches `(2804, -1741)` and stops against the falling block's left
+face without entering `StClimb`, then falls back through the spike field. The
+pocket is still not solved from here; that needs the 7 -> 7a route, not a
+better input.

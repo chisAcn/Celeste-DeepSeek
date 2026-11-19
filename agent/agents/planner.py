@@ -27,6 +27,7 @@ from agent.agents.messages import (
 )
 from agent.agents.retry import LocalRetry
 from agent.agents.skills import Replay, SkillBook
+from agent.aims import repair
 from agent.kb import DEFAULT_BUDGET, GUIDANCE, terms_for
 from agent.knowledge import MOVEMENT_REFERENCE, mechanisms_reference
 from agent.protocol import ActionSequence, GameState
@@ -102,6 +103,10 @@ class PlannerAgent:
         self.plans = 0
         self.failures = 0
         self.last_error: str | None = None
+        # Plans whose dash chunk declared a direction the aim frame would not
+        # have seen. Repaired before sending, counted so the log shows it.
+        self.aim_repairs = 0
+        self.last_aim_note: str | None = None
 
     # -- context ---------------------------------------------------------
 
@@ -185,18 +190,21 @@ class PlannerAgent:
 
     # -- contract --------------------------------------------------------
 
-    def contract(self, anchor: Anchor, plan) -> StepContract:
+    def contract(self, anchor: Anchor, plan, actions=None) -> StepContract:
         """Bind the plan to the anchor, not to whatever the model wrote.
 
         The planner owns the success band and the frame budget; the precondition
         is always the anchor state, because that is the only thing the executor
-        can actually promise.
+        can actually promise. ``actions`` overrides the plan's own list when the
+        dash aim had to be held into the frame the game reads it on -- the
+        contract has to promise what will actually be sent.
         """
         low = getattr(plan, "expected_x_min", None)
         high = getattr(plan, "expected_x_max", None)
         expected = None if low is None or high is None else (low, high)
         return StepContract.for_plan(
-            plan.actions, expected_x=expected, planned=anchor.state, slack=self.slack,
+            plan.actions if actions is None else actions, expected_x=expected,
+            planned=anchor.state, slack=self.slack,
             position_slack=self.frozen_slack if anchor.frozen else self.position_slack)
 
     # -- bookkeeping -----------------------------------------------------
@@ -316,11 +324,15 @@ class PlannerAgent:
                 continue
             latency = time.monotonic() - started
             try:
-                step = PlannedStep(anchor_id=anchor.id, actions=plan.actions,
+                actions, aim_notes = repair(plan.actions)
+                if aim_notes:
+                    self.aim_repairs += len(aim_notes)
+                    self.last_aim_note = aim_notes[-1]
+                step = PlannedStep(anchor_id=anchor.id, actions=actions,
                                    goal=getattr(plan, "goal", ""),
                                    reason=getattr(plan, "reason", ""),
                                    latency=round(latency, 3),
-                                   contract=self.contract(anchor, plan))
+                                   contract=self.contract(anchor, plan, actions))
                 ActionSequence(execution_id=f"validate-{anchor.id}",
                                actions=step.actions)
             except ValueError as error:

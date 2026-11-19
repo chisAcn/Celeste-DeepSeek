@@ -345,6 +345,27 @@ python -m agent.kb --types Spikes,Spring,JumpThru     # 只列命中的段
 python -m agent.kb --types Spikes --air --show        # 空中姿态，连正文一起打
 ```
 
+#### 冲刺瞄准帧：方向不在按下的那一帧
+
+`kb/speedrun/input.md` 里有一条：**冲刺方向读的是冻结结束后的第一帧，不是按下的 F0**。桥接每 tick 应用一个动作块，而三个冻结帧不推进游戏（不跑 `Level.Update`），所以那一帧的方向来自**冲刺块的下一块**。
+
+这意味着一帧的冲刺块是个陷阱：
+
+```
+[right+up+dash] x1   +   [right] x20     → 实际是水平冲刺
+[right+up+dash] x1   +   [right+up] x1 + [right] x19   → 才是右上
+```
+
+房间 8 曾因此判定"桥接把空中斜向压平了"，实测逐帧轨迹后才确认：`right+up` 全程按住时 `vx/vy = 169.7/-169.7`，桥接没问题，是分块把方向丢在了冻结里。同一轮的另两条"疑点"也都不成立——super/hyper 正常（`325/-52.5` 与 `260/-105` 都对上代码），抓墙"只爬 3px"是抓住了 8px 高的底座檐口后 climb hop（`vy -120`）。
+
+`agent/aims.py` 把这条规则变成可执行的约束：
+
+- `audit(actions)` — 冲刺块声明了方向、但下一块把它丢掉时，指出是哪一块。
+- `repair(actions)` — 把声明的方向补到冻结后的那一帧上：下一块让出第一帧给瞄准，剩下的帧数不变。**总帧数不变**，所以契约、轨迹和 `expect` 行仍然对齐。
+- 规划器与单循环两条路径都在发送前调用；改过的计划写进 `SESSION.aim_repairs`，不静默。
+
+`agent/knowledge.py` 的常驻块也补了这一条，连 super/hyper 的触发条件（F4–F14 内按下跳、水平取朝向）一起——模型据此排的块才不会在冻结里丢掉方向。
+
 ### 单循环路径的防漂移
 
 - **`--settle`** — 规划前等最多 3 秒到「落地且稳定」的观测。
@@ -410,6 +431,7 @@ PICO-8 版 Celeste Classic 用独立的输入格式，单独训练：`python -m 
 - `agent/agents/seed-routes.json` — 房间 7 三段宏的机器可读版本（路线书的起点，见「路线重放」）
 - `agent/agents/retry.py` — 失败后不唤醒模型的换路逻辑（见「本地重算」）
 - `agent/knowledge.py` — 常驻移动常数 + 按房间挑选的机制说明
+- `agent/aims.py` — 冲刺方向在冻结后一帧才被读取，这里补上会被丢掉的那一帧（见「冲刺瞄准帧」）
 - `agent/kb.py` — 从 `kb/speedrun/` 按段检索并原样引用的长尾知识（见「长尾检索」）
 
 源码：https://github.com/chisAcn/Celeste-Deepseek
