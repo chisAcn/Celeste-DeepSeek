@@ -600,3 +600,77 @@ only refill inside this climb; it sits 56px below the pad and an `up+dash` lifts
 44, so it cannot substitute for landing there. The chimney at the top (`9z`,
 x2904) is 8px wide, so climbing through it needs the hitbox centred at exactly
 2908 -- tighter than anything this chain has attempted.
+
+## x2920..2923 is a crumble, and it refills the dash (2026-11-19)
+
+The "we land 5px past the pad and fall" reading was wrong about what is under
+her. `get_collision` reports a `CrumblePlatform` at `x2904..2928, y-1736`, and
+the wallbounce arc lands on it dead centre:
+
+```
+f72467 (2923,-1736) v(0, 160)  g1 d0   <- touches down
+f72468 (2923,-1736) v(0,   0)  g1 d1   <- dash refilled by the landing
+```
+
+Twenty frames of standing on it change nothing: it only crumbles once she
+leaves. That makes the pocket's right-hand route finishable without the pixel:
+
+| step | input | result |
+|---|---|---|
+| wallbounce, then neutral | `_:34` | lands on the crumble, `(2923,-1736)`, `dashes 1` |
+| jump, then up-dash, drift left | `jump:10` `up+dash:1` `up:12` `left:36` | lands on the `2904..2912` jump-through at **`(2908,-1792)`, `dashes 1`** |
+| dash, then jump with `down` held | `right+dash:1` `right+down:2` `right+down+jump:24` | **`(2920,-1793) v(325,-52.5)`**, the reference's hyper |
+
+The jump between the two platforms is 56px up, which no single jump reaches --
+it is a jump (18px of it, with the key held) plus an up-dash (44px). The crumble
+is what pays for the dash, so the sequence costs nothing the route did not
+already have.
+
+## The last 4px: the arc, not the landing
+
+From `(2908,-1792)` the hyper reproduces exactly and still stops at the wall:
+
+```
+f111026 (2920,-1793) v(325,-52.5)   <- reference f1737 (2932,-1792) v(325,-52.5)
+f111040 (2988,-1779) v(264, 157)    <- reference f1749 (2988,-1804) v(0,-105)
+```
+
+The wall at `x2992` is solid from `y-1808` down, so the exit at
+`x3016, y-1840..-1816` has to be crossed above `-1808`. We peak at `-1804`
+(4px short) and arrive at the wall already falling; the reference arrives at
+`-1804` still *rising* at `-105` and slides up the face into the doorway.
+
+Its `vy` stays at `-52.5` for twelve frames regardless of how long the jump is
+held (10, 12, 24 and 26 frames all peak at `-1804`), so the difference is not
+"hold jump longer". Holding the jump from the pad does produce twelve
+gravity-free frames (`f113593`..`f113601`: `vy -105` unchanged), which is the
+same window; the reference simply enters the hyper 7px further right (it lands
+at 2915, we land at 2908) and spends the window clearing the corner instead of
+reaching it.
+
+## After a death, plan from the last frame she stood on
+
+A candidate that dies used to cost the whole branch: the save slot stayed at
+the entrance, so every later attempt replayed the same opening. The search now
+rolls the root forward instead (`agent/checkpoint.py`, wired into
+`agent/live_search.py`):
+
+- On a failed attempt, take the deepest sample whose stance is `ground` or
+  `climb` -- a wall grip counts, an airborne frame and a death do not.
+- Replay only root -> that frame, confirm it reproduces the frame and ends
+  standing, then `save_state`: the slot *is* the checkpoint.
+- Restart the beam from there. `--no-checkpoint` restores the old behaviour,
+  `--max-checkpoints` caps how far one route may walk.
+
+The target is frozen in world coordinates before the first rollback, so `dx/dy`
+keep meaning "from where the search began". `best` is dropped on a rollback
+because the recorded prefixes are root-relative and can no longer be replayed.
+
+Measured cost in room 8: the pocket-to-pad route is 153 frames; with the slot
+parked on the pad each ending costs 40-55 frames, and `logs/lab.py` /
+`logs/lab_room.py` run them without touching the base at all.
+
+Deterministic coverage: `tests/test_live_search.py` drives a one-dimensional
+fake bridge with a death line, and asserts that the second attempt starts at
+the checkpoint (x=5) rather than at the entrance (x=0), that `--no-checkpoint`
+keeps every start at 0, and that a trace with no landing is never promoted.
