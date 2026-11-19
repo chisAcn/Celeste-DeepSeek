@@ -206,3 +206,40 @@ Two numbers from this room are worth keeping because they contradict the
 reference sheet: a jump is 27px (`varJump` clamps `vy` at -105 for eleven
 frames), and an up dash adds 42px. Together they are 69px, which is why the
 80px between the two falling blocks cannot be crossed without the wall bounce.
+
+### Deviation stop and traced replay, live (2026-11-19)
+
+Run with the 0.3.4 bridge loaded (`ping` reports `expect: true`, `positions: true`,
+`mod_version: 0.3.4`), standing on the floor of room 8 at `(2720, -1704)`,
+`on_ground: true`, `dashes: 1`. Every step starts from the same Speedrun Tool
+save slot, so the arcs are compared from an identical start rather than from
+"roughly the same spot".
+
+1. **The arc is real.** `execute_frames` with `right x20`,
+   `capture_positions: true` returns `completed` after 20 frames and 20
+   positions, ending at `(2747, -1704)`.
+2. **A frame-7 lie stops on frame 7.** The same 20 frames are sent again with
+   the captured arc, except that row 7 is moved 40px in x. The result is
+   `status: deviated`, `executed_frames: 7`, and
+   `deviation: {frame: 7, index: 7, expected: [2767, -1704], actual: [2727, -1704],
+   offset: [40, 0], tolerance: 1.5}`. The remaining 13 frames are never sent.
+3. **The check does not fire on its own.** The untouched arc, same tolerance,
+   same start, completes all 20 frames with `deviation: null`. The room is
+   translation-exact at this scale, so a stop here means the arc stopped
+   fitting, not that 1.5px was too tight.
+4. **Traced replay closes the loop.** The 20 captured frames were written as
+   `logs/verify-routes.json` (`start: [2720, -1704]`, `end: [2747, -1704]`,
+   20 `trace` rows) and run through `--collab --steps 1 --route-book`:
+   `goal: replay verify-right20`, `latency: 0.0`, `expect: 20`, verdict
+   `LANDED`, 20 frames, `planner_replays: 1`, `plan_failures: 0`,
+   `kb_sections: 0` -- the model was never called.
+5. **The guard protects the replay too.** Corrupting row 7 of the stored trace
+   by 40px and replaying from the same start gives verdict `ABORTED`,
+   `detail: deviated`, `frames: 7`, settled at `(2727, -1704)`: she stops on the
+   floor instead of carrying the rest of the macro into the room. The book
+   records `misses: 1`, `streak: 1`, and `end` moves to the settled
+   `(2750, -1704)` of the earlier landed replay.
+
+One gap this leaves: the replay's contract still only asks for "within 6px of
+the recorded landing". The frame-by-frame promise is the `expect` array, and a
+route recorded without one can still run all its frames past a changed room.
