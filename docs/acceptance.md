@@ -432,3 +432,47 @@ field, so a fresh model plan builds its contract through
 `_payload` then sends an empty `hold_after` and a plan that happens to end on a
 wall drops her. Closing that needs a way for a plan to declare its landing
 posture, which is a planner question, not a bridge one.
+
+## Native CelesteTAS playback: room 8 is passable (2026-11-19)
+
+`CelesteTAS 3.47.1` was already loaded -- it and `SpeedrunTool 3.29.2` sit in
+`Mods` as zips and Everest unpacks them into `Mods/Cache`, so nothing had to be
+installed. The mod takes `--tas <file>`, which settles the room from the other
+side: let the mod play the reference run and watch the bridge.
+
+Two launching details worth keeping:
+
+- Direct `Celeste.exe` exits in under a second unless `steam_appid.txt`
+  (`504230`) sits next to it -- `SteamAPI.RestartAppIfNecessary` hands off to
+  Steam and Steam does not relaunch it.
+- `console load 1` in a TAS file loads chapter 1 at its **start**, not at the
+  saved checkpoint. A file trimmed to `#lvl_8` therefore plays its room-8
+  inputs in room 1; the whole file has to be played.
+- Playback starts on its own on the `--tas` path; no Studio needed.
+
+Result: rooms 1 -> 8b in 1759 frames, no death, chapter finished (frame 2995,
+no level loaded). Raw samples in `logs/tas-native.json`; 135 of them land in
+room 8, entered at `(2717, -1672)` and left at `(3017, -1820)`.
+
+| frame | x, y | state | vx, vy |
+|---|---|---|---|
+| 1624 | 2717, -1672 | `StNormal`, rising, 36 frames of door freeze | 0, -105 |
+| 1672 | 2731, -1704 | `StDash`, 11 frames, **on the floor** | 240, 0 |
+| 1683 | 2777, -1705 | `StNormal`, hyper out of that dash | **325, -52.5** |
+| 1710 | 2897, -1734 | `StDash`, up dash against the right wall | 0, -240 |
+| 1738 | 2938, -1793 | `StNormal`, hyper again off the ledge | **325, -52.5** |
+| 1759 | 3017, -1820 | leaves for 8b | 280, -105 |
+
+So the pocket is not a dead end: dash along the floor, hyper out of it, one more
+jump, up dash on the right wall, land on the ledge at `y = -1792`, dash again,
+hyper, and the exit is to the right.
+
+The replay in `agent.tas_play` died at frame 41 because of how `Z` was read.
+Aligning the samples against the file (observed frame - 34 = TAS row frame, from
+the 325 super and the up dash) puts the dash three frames *into* the 14-frame
+`14,R,Z` block, not on its first frame: `Z` is a crouch-dash mode, so it ducks
+first and dashes once the duck is on the ground. Handing `down+dash` to the
+block's first frame while she is still airborne turns it into a down-diagonal
+dash, and the jump that follows leaves at 183 px/s instead of 325 -- five pixels
+short of clearing the spikes. The fix, if we want our own replay to pass, is a
+duck lead-in that keeps the frame count.
