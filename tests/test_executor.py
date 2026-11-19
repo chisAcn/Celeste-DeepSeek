@@ -315,9 +315,14 @@ def test_a_stance_that_contradicts_on_ground_is_refused():
     assert Success(on_ground=False, stance="climb").stance == "climb"
     assert Success(on_ground=True, stance="ground").stance == "ground"
     with pytest.raises(ValueError):
-        Success(on_ground=True, stance="climb")
-    with pytest.raises(ValueError):
         Success(on_ground=False, stance="ground")
+    with pytest.raises(ValueError):
+        Success(on_ground=True, stance="air")
+    # ``climb`` is not a contradiction with either one: grabbing a wall while
+    # standing on the floor under it is real, and the live bridge reports
+    # StClimb with on_ground true when she does it.
+    assert Success(on_ground=True, stance="climb").stance == "climb"
+    assert Success(on_ground=False, stance="climb").stance == "climb"
 
 
 def test_an_old_snapshot_without_a_state_name_still_parses():
@@ -327,3 +332,35 @@ def test_an_old_snapshot_without_a_state_name_still_parses():
     assert player.state == ""
     assert player.stance() == "air"
     assert PlayerState(on_ground=True).stance() == "ground"
+
+
+def test_holding_a_wall_is_not_a_stall():
+    # Live: left+grab from the floor of room 8 goes StClimb and then does not
+    # move -- 0.03 px a frame at best -- so the still clock used to fire at
+    # twelve frames and abort the step mid-grip, before its landing.
+    executor = ExecutorAgent(None, None)
+    seq = ActionSequence(execution_id="grip", actions=[
+        FrameAction(buttons=["left", "grab"], frames=40)])
+    stall = still_since = 0
+    last = (100.0, -1128.0)
+    climbing = state(100.0, on_ground=False, state_name="StClimb")
+
+    for frames in range(1, 41):
+        stall, still_since, last = executor._sample(
+            seq, [], climbing, frames, still_since, last)
+        assert stall < 12, f"aborted mid-grip at frame {frames}"
+
+
+def test_walking_into_a_wall_still_stalls():
+    # The exemption is the button, not the wall: running into one with no grab
+    # held is still a plan that stopped making progress.
+    executor = ExecutorAgent(None, None)
+    seq = ActionSequence(execution_id="push", actions=[
+        FrameAction(buttons=["right"], frames=40)])
+    stall = still_since = 0
+    last = (100.0, -1128.0)
+
+    for frames in range(1, 20):
+        stall, still_since, last = executor._sample(
+            seq, [], state(100.0), frames, still_since, last)
+    assert stall >= 12

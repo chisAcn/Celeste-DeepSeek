@@ -285,7 +285,7 @@ filed under "not" -- the same bucket as falling past the drop. `Success.stance`
 adds the third one (`ground` / `climb` / `air`), and bridge 0.3.5 reports the
 state machine name on `get_state` so the executor can read it.
 
-Verified off-line (165 tests, ruff clean):
+Verified off-line (167 tests, ruff clean):
 
 - `PlayerState.stance()` returns `climb` for `StClimb`, otherwise falls back to
   `on_ground`. A snapshot without a `state` key -- every bridge before 0.3.5 --
@@ -297,13 +297,45 @@ Verified off-line (165 tests, ruff clean):
   guess.
 - `stance: None` (the default, and what every existing route carries) changes
   nothing: the x/y bands decide, as before.
-- `stance` contradicting `on_ground` is refused when the contract is built.
+- `stance: "ground"` with `on_ground: false`, and `"air"` with `true`, are
+  refused when the contract is built. `"climb"` is refused with neither: see
+  the floor-level grab below.
 
-Not yet verified in the running game: the live instance is still 0.3.4, and the
-installed 0.3.5 DLL only loads on a restart. The new client parsed a 0.3.4
-`get_state` without error (`state: ""`, `stance: "ground"`), so the two sides
-are order-independent. After a restart, two things to look at:
+### Stance, live (2026-11-19)
 
-1. `ping` reports `mod_version: 0.3.5` and `player_state: true`.
-2. Standing and holding a wall at the same coordinates give `StNormal` and
-   `StClimb`, and a `stance: "climb"` contract accepts only the second.
+The 0.3.5 bridge was already loaded when this ran (`ping` reports
+`mod_version: 0.3.5`, `player_state: true`), so no restart was needed. Same
+savestate each time, room 8 on the floor at `(2716, -1704)`.
+
+1. **The state machine now arrives.** `get_state` carries `state: "StNormal"`
+   standing, and the same coordinates read `StClimb` while `left+grab` is held
+   -- 60 of 78 trajectory rows, position `(2716, -1704)`, `v = (0, 0)`.
+2. **A wall grab at floor level is grounded.** That `StClimb` row reports
+   `on_ground: true`: the wall she is holding starts at the floor. So `climb`
+   does not imply airborne, and the contract validator no longer pretends it
+   does. This is the one place the live data overruled the off-line design.
+3. **The landing snapshot keeps the grip.** `Finish` releases the input before
+   it snapshots, so the question was whether the judged `after` still says
+   `StClimb`. It does: all three runs below end with `state: StClimb` and
+   `stamina 109.8` (drained by the hold), at `(2716, -1704)`.
+4. **The executor judges by stance, not by the bands.** Running the same 52
+   frames (`left x12`, `left+grab x40`) through `ExecutorAgent`:
+
+   | contract | status | reason |
+   |---|---|---|
+   | `stance="climb"` | `SUCCEEDED` | `None` |
+   | `stance="ground"` | `UNSATISFIED` | `not_grounded` |
+   | `stance="air"` | `UNSATISFIED` | `not_airborne` |
+
+5. **Holding a wall used to abort the step.** The first live run of those same
+   three steps came back `ABORTED / stalled` at frame 13-14, not at 52: the
+   still clock counted a grip as a plan that stopped moving, because `left`
+   counted as intent to move and she was not moving. `grab` now holds the
+   clock, so a step that ends on a wall reaches its landing at all. Walking
+   into a wall without grab still stalls, and both shapes are pinned by tests.
+
+STILL OPEN: `Standby.resting`, `SkillBook.match` and `LocalRetry.offer` still
+require `on_ground`, so a step that ends on a wall publishes no anchor, is
+never matched or retried, and the session waits out `anchor_timeout` instead of
+continuing. The stance answers "was this a landing"; it does not yet answer
+"can the next step be planned from up there".

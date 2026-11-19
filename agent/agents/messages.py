@@ -88,10 +88,18 @@ class Success(Schema):
 
     @model_validator(mode="after")
     def consistent(self):
-        """A stance that contradicts on_ground can never hold; refuse it early."""
+        """Refuse the two stances that cannot hold; ``climb`` is not one of them.
+
+        ``climb`` says nothing about ``on_ground``: a wall grab at floor level
+        is a real landing, and the 0.3.5 bridge reports exactly that shape --
+        ``StClimb`` with ``on_ground`` true -- standing on the floor of room 8
+        with a hand on the wall.
+        """
         if self.stance is None or self.on_ground is None:
             return self
-        if (self.stance == "ground") != self.on_ground:
+        if self.stance == "ground" and not self.on_ground:
+            raise ValueError("stance and on_ground disagree")
+        if self.stance == "air" and self.on_ground:
             raise ValueError("stance and on_ground disagree")
         return self
 

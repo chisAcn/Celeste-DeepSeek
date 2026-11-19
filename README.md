@@ -389,9 +389,10 @@ python -m agent.kb --types Spikes --air --show        # 空中姿态，连正文
 成功带默认只看 `x`/`y` 区间，这是有意的：模型给的是一条弧线的落点，不是一次状态断言。需要断言姿态时用 `Success.stance`，取 `ground` / `climb` / `air`：
 
 - `climb` 是抓墙（`StClimb`），和"空中"不是同一件事。房间 8 的 TAS 段就停在墙面上，同一组坐标在墙上和在半空是两种不同的下一步。
-- 契约自相矛盾（`stance="climb"` 配 `on_ground=True`）在构造时就被拒，不会等到跑完才报。
+- `climb` **不蕴含离地**：贴着地面的墙抓上去时，实机快照是 `StClimb` 且 `on_ground=true`。所以只有 `ground` 配 `on_ground=False`、`air` 配 `on_ground=True` 这两种自相矛盾会在构造时被拒。
 - 桥接 0.3.5 起 `get_state` 带 `state`（状态机名，如 `StClimb`）。更早的桥接该字段为空，此时要求 `climb` 会得到 `stance_unknown`——快照看不见墙，就不该假装看见了。
 - 默认 `None` 保持旧行为，现存路线书与契约一条都不用改。
+- 按住 `grab` 时不计卡死：抓在墙上原地不动是"握着"，不是"计划没进展"，否则以挂墙收尾的一步会在第 12 帧被判 `stalled` 而永远走不到落点。
 
 已知缺口：抓墙时 `Standby` 仍判 `SETTLING`，锚点发不出来，所以"从墙上接着规划"这一步还没打通（`SkillBook.match` 与 `LocalRetry` 同样要求站地）。`stance` 目前只解决"落点判对了没有"。
 

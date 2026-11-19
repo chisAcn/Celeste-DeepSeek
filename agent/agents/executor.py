@@ -138,12 +138,17 @@ class ExecutorAgent:
         """Track stillness in frames, and only while the input intends motion.
 
         Crouching or grabbing on the spot is not a stall, so any action whose
-        buttons are all non-movement resets the clock.
+        buttons are all non-movement resets the clock. Neither is a grab held
+        against a wall: climbing in place moves a fraction of a pixel per frame
+        and a grab at the top of a climb does not move at all, so counting that
+        as stillness aborted the step at ``stall_frames`` -- twelve frames in,
+        mid-grip -- before it could ever reach its landing.
         """
         player = state.player
         if player is None:
             return 0, frames, last
-        idle = not (set(first_action(sequence, frames)) & MOVING)
+        held = set(first_action(sequence, frames))
+        idle = not (held & MOVING) or "grab" in held
         moved = last is not None and max(
             abs(player.x - last[0]), abs(player.y - last[1])) >= 0.5
         if idle or moved:
