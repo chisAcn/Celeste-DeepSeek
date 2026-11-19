@@ -339,3 +339,49 @@ require `on_ground`, so a step that ends on a wall publishes no anchor, is
 never matched or retried, and the session waits out `anchor_timeout` instead of
 continuing. The stance answers "was this a landing"; it does not yet answer
 "can the next step be planned from up there".
+
+### Planning from a wall (built 2026-11-19, in-game check pending a restart)
+
+A climb landing has to survive the tick that ends the job. It does not: `Finish`
+releases the virtual input, and the next `Update` drops her off the wall -- the
+live check below shows `StClimb` becoming `StNormal` within 30ms of the job
+ending. So relaxing the three grounded-only gates alone would have produced an
+anchor that can never fire where it matters.
+
+Bridge 0.3.6 adds `hold_after`: the buttons a finished job keeps pressed. The
+executor derives it from the contract, `["grab"]` when the landing promises
+`stance: "climb"`, and the route book records `end_stance` so a replayed wall
+route carries the same promise.
+
+Verified off-line (178 tests, ruff clean):
+
+- `Standby.resting` accepts a wall grab and still rejects a slow fall. A
+  `StClimb` snapshot anchors after the quiet window; the same snapshot with no
+  state name (a bridge that cannot see walls) stays `SETTLING`.
+- `SkillBook.match` and `LocalRetry.offer` accept a climb anchor and still
+  refuse an airborne one, so a route can start on a wall instead of being a hit
+  that is never used.
+- `note()` promotes a step that ended on a wall, records `end_stance`, and
+  still refuses one that ended mid-fall. A landing updates the stance; the
+  field round-trips through the file, and a row written before it existed loads
+  with `end_stance: None` and is judged by the bands.
+- `ExecutorAgent._payload` asks for the grip only when the contract's stance is
+  `climb`; a `ground` or unset stance sends an empty list, which the bridge
+  reads as "release everything".
+- End to end through the team session with a stub executor that keeps returning
+  a `StClimb` snapshot: the second anchor is published, the model is asked a
+  second time, and its context carries `footing.stance == "climb"`.
+
+The client also ran a climb step against the still-loaded 0.3.5 bridge: no
+error, the extra parameter is ignored, and the step behaves exactly as before
+(`SUCCEEDED / climb`, `UNSATISFIED / not_grounded`, `UNSATISFIED /
+not_airborne`). So the two sides deploy in either order and only the restart
+turns the holding on.
+
+To check after restarting Celeste:
+
+1. `ping` reports `mod_version: 0.3.6` and `hold_after: true`.
+2. A step ending in `left+grab` with `Success(stance="climb")` leaves her in
+   `StClimb` after the job, not `StNormal` -- and stays there for a second.
+3. The session publishes a second anchor from that state instead of waiting out
+   `anchor_timeout`, which is what step three was for.

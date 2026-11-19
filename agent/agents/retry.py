@@ -72,7 +72,7 @@ class LocalRetry:
             return None
         state = anchor.state
         player = state.player
-        if player is None or player.dead or not player.on_ground:
+        if player is None or player.dead or player.stance() == "air":
             return None
         candidates = []
         for entry in self.book.entries:
@@ -103,7 +103,8 @@ class LocalRetry:
         if entry.end_x is not None:
             ok = Success(
                 x=(entry.end_x - 6, entry.end_x + 6),
-                y=None if entry.end_y is None else (entry.end_y - 6, entry.end_y + 6))
+                y=None if entry.end_y is None else (entry.end_y - 6, entry.end_y + 6),
+                stance=entry.end_stance)
         contract = StepContract(
             pre=Precondition.from_state(anchor.state, self.position_slack),
             ok=ok, abort=Abort(timeout_frames=entry.frames + self.slack))

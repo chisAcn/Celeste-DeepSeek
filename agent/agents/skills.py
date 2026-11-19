@@ -48,6 +48,12 @@ class Replay:
     actions: list[FrameAction]
     end_x: float | None = None
     end_y: float | None = None
+    # Where the route ended: "ground", "climb" or "air". A climb ending needs
+    # the grip kept for the next Update tick, so the replay contract has to
+    # carry it -- otherwise replaying a wall route drops her the moment the job
+    # finishes. None is a route recorded before this field existed, judged by
+    # the bands alone.
+    end_stance: str | None = None
     hits: int = 0
     misses: int = 0
     streak: int = 0
@@ -100,6 +106,8 @@ class Replay:
         if self.end_x is not None:
             row["end"] = [round(self.end_x, 1),
                           None if self.end_y is None else round(self.end_y, 1)]
+        if self.end_stance:
+            row["end_stance"] = self.end_stance
         if self.trace:
             row["traced_frames"] = len(self.trace)
         return row
@@ -120,6 +128,8 @@ class Replay:
         if self.end_x is not None:
             row["end"] = [round(self.end_x, 1),
                           None if self.end_y is None else round(self.end_y, 1)]
+        if self.end_stance:
+            row["end_stance"] = self.end_stance
         if self.trace:
             row["trace"] = [[round(x, 1), round(y, 1)] for x, y in self.trace]
         return row
@@ -139,6 +149,9 @@ class Replay:
         if not actions:
             raise ValueError("route has no actions")
         end = row.get("end") or []
+        end_stance = row.get("end_stance")
+        if end_stance is not None and end_stance not in ("ground", "climb", "air"):
+            raise ValueError("route end_stance is not a stance")
         trace = row.get("trace")
         frames = sum(action.frames for action in actions)
         if trace is not None:
@@ -153,6 +166,7 @@ class Replay:
                    dashes=int(row.get("dashes", 0)), actions=actions,
                    end_x=float(end[0]) if end else None,
                    end_y=None if len(end) < 2 or end[1] is None else float(end[1]),
+                   end_stance=end_stance,
                    hits=int(row.get("hits", 0)), misses=int(row.get("misses", 0)),
                    streak=int(row.get("streak", 0)),
                    origin=str(row.get("origin", "disk")), trace=trace)
@@ -216,7 +230,9 @@ class SkillBook:
     def match(self, state: GameState) -> Replay | None:
         """The closest route whose start this anchor still stands on."""
         player = state.player
-        if player is None or player.dead or not player.on_ground:
+        # A route can start on a wall as well as on the floor: both are footings
+        # the next step can be planned from, and only a fall cannot.
+        if player is None or player.dead or player.stance() == "air":
             return None
         best: tuple[float, Replay] | None = None
         for entry in self.entries:
@@ -248,6 +264,7 @@ class SkillBook:
                 if settled is not None and settled.player is not None:
                     entry.end_x = settled.player.x
                     entry.end_y = settled.player.y
+                    entry.end_stance = settled.player.stance()
                 # A fresh landing is also the best arc we have: it was recorded
                 # on this build, in this room, from this spot.
                 entry.trace = trace or entry.trace
@@ -259,14 +276,20 @@ class SkillBook:
         if not landed or not actions:
             return None
         settled = outcome.settled or report.end
-        if settled is None or settled.player is None or not settled.player.on_ground:
+        if settled is None or settled.player is None:
+            return None
+        footing = settled.player.stance()
+        if footing == "air":
+            # A step that ended mid-fall never came to rest, so there is no
+            # place to replay it from. The floor and a wall both are.
             return None
         promoted = self.add(Replay(name=self._free_name("learned"),
                                    room=start.room.name,
                                    x=start.player.x, y=start.player.y,
                                    dashes=start.player.dashes,
                                    actions=actions, trace=trace,
-                                   end_x=settled.player.x, end_y=settled.player.y))
+                                   end_x=settled.player.x, end_y=settled.player.y,
+                                   end_stance=footing))
         return None if promoted is None else promoted.name
 
     def _free_name(self, prefix: str) -> str:

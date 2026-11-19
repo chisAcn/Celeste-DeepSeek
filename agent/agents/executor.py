@@ -168,6 +168,20 @@ class ExecutorAgent:
             await asyncio.sleep(0.02)
         return None
 
+    @staticmethod
+    def _payload(sequence: ActionSequence, contract: StepContract) -> dict:
+        """What to send, with the grip kept when the step promises a wall.
+
+        The mod releases the virtual input when a job finishes, so a landing on
+        a wall only survives if the job says to keep holding grab. Asking for it
+        from the contract means the plan and the landing agree: a step that
+        promised ``stance: climb`` ends with her still on the wall.
+        """
+        payload = sequence.model_dump()
+        if contract.ok.stance == "climb" and not payload.get("hold_after"):
+            payload["hold_after"] = ["grab"]
+        return payload
+
     async def run(self, sequence: ActionSequence, contract: StepContract) -> StepReport:
         planned = sum(action.frames for action in sequence.actions)
         start = await self.observe()
@@ -187,7 +201,7 @@ class ExecutorAgent:
         stopped: str | None = None
         stopped_at: int | None = None
 
-        first = await self.client.call("execute_frames", **sequence.model_dump())
+        first = await self.client.call("execute_frames", **self._payload(sequence, contract))
         if first.get("status") == "running":
             deadline = time.monotonic() + max(5.0, planned / 20.0)
             while True:

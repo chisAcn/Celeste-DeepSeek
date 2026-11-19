@@ -98,7 +98,9 @@ class MockBridge:
                 if status != "completed" or self.state.room.completed:
                     break
         finally:
-            self.held.clear()
+            # Same contract as the bridge: hold_after survives the job, every
+            # other button is released with the last frame.
+            self.held = set(seq.hold_after)
         excluded = set() if seq.trace_frames else {"checkpoints"}
         if deviation is None:
             excluded.add("deviation")

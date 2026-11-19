@@ -384,3 +384,45 @@ def test_collab_runs_against_the_mock_bridge(tmp_path, monkeypatch):
     assert stats.rejected == 0
     assert stats.landed == stats.steps
     assert stats.superseded == 0
+
+
+def test_a_wall_grab_is_an_anchor_too():
+    """Hanging on a wall is still, and it is a footing: the next step can start."""
+    agent = Standby(still_for=0.1)
+    hang = state(on_ground=False, vx=0.0, vy=0.0, state="StClimb")
+
+    assert agent.observe(hang, 0.0) == "SETTLING"
+    assert agent.observe(hang, 0.05) == "SETTLING"
+    assert agent.observe(hang, 0.12) == "ANCHORED"
+
+
+def test_a_slow_fall_is_not_an_anchor():
+    """No wall, nothing holding her: the old two-way reading has to stand."""
+    agent = Standby(still_for=0.01)
+    falling = state(on_ground=False, vx=0.0, vy=0.0)
+
+    assert falling.player.stance() == "air"
+    assert [agent.observe(falling, t) for t in (0.0, 0.1)] == ["SETTLING"] * 2
+
+
+def test_a_step_that_ends_on_a_wall_is_planned_from():
+    """The whole point of step three: the session does not end on a landing.
+
+    Before this, a wall grab read as airborne, so no anchor was published, and
+    the run waited out the anchor timeout and stopped -- one step into a macro
+    that is all about walls.
+    """
+    calls = []
+
+    async def plan(context):
+        calls.append(context)
+        return FixturePlan(actions=[right(10, ("left", "grab"))])
+
+    hang = state(on_ground=False, vx=0.0, vy=0.0, state="StClimb")
+    session, _ = build(plan, StubExecutor(current=hang), max_steps=2, replay=False)
+
+    asyncio.run(session.run())
+
+    assert len(calls) == 2
+    assert calls[1]["footing"]["stance"] == "climb"
+    assert session.stats.landed == 2

@@ -44,6 +44,10 @@ public sealed class Module : EverestModule {
         public float Tolerance = 1f;
         public List<Vector2>? Positions;
         public JsonObject? Deviation;
+        // Buttons kept pressed after the last frame. A step that ends hanging on
+        // a wall has to keep the grip, or the next Update tick drops her and the
+        // landing cannot be sampled; nothing else needs this, so it is opt-in.
+        public List<string>? HoldAfter;
     }
     public override void Load() {
         lifetime = new();
@@ -114,6 +118,7 @@ public sealed class Module : EverestModule {
                 ["entities"]=true, ["collision"]=true, ["tiles"]=true,
                 ["capture"]=true, ["menu"]=true, ["save"]=true, ["trajectory"]=true,
                 ["expect"]=true, ["positions"]=true, ["player_state"]=true,
+                ["hold_after"]=true,
                 ["mod_version"]=Metadata.Version.ToString()
             };
             case "get_state": return snapshot.DeepClone();
@@ -238,6 +243,17 @@ public sealed class Module : EverestModule {
                 float tolerance = p["tolerance"]?.GetValue<float>() ?? 1f;
                 if (float.IsNaN(tolerance) || tolerance is < 0 or > 64) throw new ArgumentException("tolerance");
                 bool capturePositions = p["capture_positions"]?.GetValue<bool>() ?? false;
+                List<string>? holdAfter = null;
+                if(p["hold_after"] is JsonArray hold) {
+                    if(hold.Count > 4) throw new ArgumentException("hold_after count");
+                    holdAfter = new List<string>();
+                    foreach(var b in hold) {
+                        string name = b!.GetValue<string>();
+                        if(!InputController.Allowed.Contains(name)) throw new ArgumentException("invalid hold button");
+                        holdAfter.Add(name);
+                    }
+                    if(holdAfter.Count == 0) holdAfter = null;
+                }
                 if (restore) {
                     if (!SpeedrunInterop.Available || !SpeedrunInterop.TasIsSaved!(saveSlot))
                         throw new ArgumentException("bridge save slot unavailable or empty");
@@ -250,7 +266,8 @@ public sealed class Module : EverestModule {
                 var before = Observe(level);
                 if (tracePlatforms) before["platform_sample"] = PlatformObserver.Capture(level);
                 active = new Job { Id=id, Actions=(JsonArray)actions.DeepClone(), Before=before, Room=level.Session.Level, Owner=owner, Checkpoints=trace ? new JsonArray() : null, TracePlatforms=tracePlatforms,
-                    Expect=expect, Tolerance=tolerance, Positions=capturePositions ? new List<Vector2>() : null };
+                    Expect=expect, Tolerance=tolerance, Positions=capturePositions ? new List<Vector2>() : null,
+                    HoldAfter=holdAfter };
                 executions[id] = new JsonObject { ["execution_id"]=id, ["status"]="running", ["executed_frames"]=0 };
                 return executions[id].DeepClone();
             default: throw new ArgumentException("unknown method");
@@ -358,7 +375,10 @@ public sealed class Module : EverestModule {
     }
     void Finish(string status) {
         if(active is not {} job) return;
-        input.Release();
+        // Hold, not Release, when the step promised to end on a wall: the grip
+        // is geometry for the next plan, and dropping it on the same tick would
+        // turn a climb landing into a fall before anyone could look at it.
+        input.Hold(job.HoldAfter);
         executions[job.Id]=new JsonObject { ["execution_id"]=job.Id, ["status"]=status, ["executed_frames"]=job.Count, ["before"]=job.Before.DeepClone(), ["after"]=snapshot.DeepClone() };
         if(job.Checkpoints != null) executions[job.Id]["checkpoints"]=job.Checkpoints;
         if(job.Deviation != null) executions[job.Id]["deviation"]=job.Deviation;

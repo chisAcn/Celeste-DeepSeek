@@ -127,6 +127,19 @@ class PlannerAgent:
                 "The game is paused on this snapshot, so it is exact, but it resumes "
                 "before your plan runs: anything moving in the room may drift by a few "
                 "pixels. Plan a short step and land somewhere that absorbs that.")
+        if state.player is not None and state.player.stance() == "climb":
+            # A wall anchor is only real because the bridge keeps holding grab
+            # for her; say so, or the plan's first chunk drops the grip and she
+            # slides before the second one is applied.
+            context["footing"] = {
+                "stance": "climb",
+                "state": state.player.state,
+                "note": ("She is hanging on a wall and the bridge is holding grab for "
+                         "her right now. That hold ends when your first frame runs: "
+                         "keep grab in the first chunk or she starts sliding down the "
+                         "wall. Climbing up costs stamina; a wall jump does not need "
+                         "the grip released before the jump press."),
+            }
         if self.exit_room:
             context["exit_room_goal"] = self.exit_room
             if self.success_room:
@@ -271,7 +284,8 @@ class PlannerAgent:
         if replay.end_x is not None:
             ok = Success(
                 x=(replay.end_x - 6, replay.end_x + 6),
-                y=None if replay.end_y is None else (replay.end_y - 6, replay.end_y + 6))
+                y=None if replay.end_y is None else (replay.end_y - 6, replay.end_y + 6),
+                stance=replay.end_stance)
         contract = StepContract(
             pre=Precondition.from_state(anchor.state, self.position_slack),
             ok=ok, abort=Abort(timeout_frames=replay.frames + self.slack))

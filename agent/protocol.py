@@ -9,6 +9,8 @@ class Schema(BaseModel):
 
 Stance = Literal["ground", "climb", "air"]
 
+BUTTONS = frozenset({"left", "right", "up", "down", "jump", "dash", "grab"})
+
 
 class PlayerState(Schema):
     x: float = 0
@@ -83,6 +85,12 @@ class ActionSequence(Schema):
     expect: list[list[float] | None] | None = None
     tolerance: float = Field(default=1.0, ge=0, le=64)
     capture_positions: bool = False
+    # Buttons held after the last frame instead of releasing everything. A step
+    # that ends hanging on a wall needs the grip kept: the mod releases input
+    # when a job finishes, and letting go of the wall drops her before the
+    # landing can be sampled. Empty means release, which is what every step
+    # that ends on its feet wants.
+    hold_after: list[str] = Field(default_factory=list, max_length=4)
 
     @model_validator(mode="after")
     def bounded(self):
@@ -93,6 +101,9 @@ class ActionSequence(Schema):
             raise ValueError("trace exceeds 120 frames")
         if total > 600:
             raise ValueError("sequence exceeds 600 frames")
+        for name in self.hold_after:
+            if name not in BUTTONS:
+                raise ValueError(f"unknown button in hold_after: {name}")
         if self.expect is not None:
             if len(self.expect) > total:
                 raise ValueError("expect rows exceed frames")

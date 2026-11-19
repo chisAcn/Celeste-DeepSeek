@@ -148,3 +148,34 @@ def test_the_retry_contract_pins_the_anchor_and_the_known_landing():
     assert step.contract.pre.x == (98.0, 102.0)
     assert step.contract.ok.x == (114.0, 126.0)
     assert step.contract.abort.timeout_frames == 12 + retry.slack
+
+
+def test_a_wall_anchor_can_still_retry():
+    # A step that ended on a wall anchors like a landed one, so the retrier has
+    # to be willing to send from there -- otherwise the only way forward is
+    # another model call.
+    retry = LocalRetry(SkillBook())
+    retry.book.add(route("a"))
+    retry.note(outcome("MISSED", buttons=("jump",)))
+    wall = GameState.model_validate({
+        "frame": 1000,
+        "player": {"x": 100.0, "y": -1000.0, "vx": 0.0, "vy": 0.0,
+                   "on_ground": False, "dashes": 1, "stamina": 90,
+                   "dead": False, "state": "StClimb"},
+        "room": {"name": "7", "completed": False},
+    })
+
+    assert retry.offer(Anchor(id=1, state=wall, still_for=0.2)) is not None
+
+
+def test_a_wall_route_promises_the_wall():
+    # The grip has to survive the replay, so the contract says climb and the
+    # executor asks the bridge to keep holding grab.
+    retry = LocalRetry(SkillBook())
+    entry = route("b")
+    entry.end_stance = "climb"
+    retry.book.add(entry)
+    retry.note(outcome("MISSED", buttons=("jump",)))
+
+    step = retry.offer(anchor())
+    assert step is not None and step.contract.ok.stance == "climb"

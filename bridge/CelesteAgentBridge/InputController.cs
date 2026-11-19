@@ -37,6 +37,15 @@ public sealed class InputController {
         Input.Jump.Update(); Input.Dash.Update(); Input.Grab.Update(); Input.Aim.Update(); Input.UpdateGrab();
     }
     static void Set(Button button,bool held) { button.Previous=button.Held; button.Held=held; }
+    // Keep the agent's virtual input installed with only these buttons down.
+    // Used when a step ends hanging on a wall: releasing the grip there would
+    // start her falling before the landing could be read.
+    public void Hold(IEnumerable<string>? buttons) {
+        if(oldJump==null) return;
+        var keep=buttons==null ? new HashSet<string>() : buttons.Where(Allowed.Contains).ToHashSet();
+        if(keep.Count==0) { Release(); return; }
+        Apply(keep);
+    }
     public void Release() {
         if(oldJump==null) return;
         Input.Jump.Deregister(); Input.Dash.Deregister(); Input.Grab.Deregister(); Input.Aim.Deregister(); Input.MoveX.Deregister(); Input.MoveY.Deregister();

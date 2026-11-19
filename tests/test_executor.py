@@ -4,7 +4,8 @@ import pytest
 
 from agent.agents import ExecutorAgent, StepContract
 from agent.agents.messages import Abort, Precondition, Success
-from agent.protocol import ActionSequence, FrameAction, GameState, PlayerState
+from agent.mock import MockBridge
+from agent.protocol import ActionSequence, FrameAction, GameState, PlayerState, Request
 
 
 def state(x=0.0, y=-1128.0, *, dead=False, on_ground=True, dashes=1, room="6b",
@@ -364,3 +365,25 @@ def test_walking_into_a_wall_still_stalls():
         stall, still_since, last = executor._sample(
             seq, [], state(100.0), frames, still_since, last)
     assert stall >= 12
+
+
+def test_a_climb_landing_asks_the_bridge_to_keep_the_grip():
+    # The mod releases input when a job ends, so a landing on a wall only
+    # survives if the job says to keep holding grab.
+    seq = ActionSequence(execution_id="grip", actions=[
+        FrameAction(buttons=["left", "grab"], frames=6)])
+    climb = StepContract(ok=Success(stance="climb"))
+
+    assert ExecutorAgent._payload(seq, climb)["hold_after"] == ["grab"]
+    assert ExecutorAgent._payload(seq, StepContract(ok=Success()))["hold_after"] == []
+    grounded = StepContract(ok=Success(stance="ground"))
+    assert ExecutorAgent._payload(seq, grounded)["hold_after"] == []
+
+
+def test_the_mock_bridge_keeps_what_the_job_asked_it_to_hold():
+    bridge = MockBridge()
+    seq = ActionSequence(execution_id="hold", actions=[
+        FrameAction(buttons=["left", "grab"], frames=4)], hold_after=["grab"])
+    bridge.dispatch(Request(id="hold-1", method="execute_frames", params=seq.model_dump()))
+
+    assert bridge.held == {"grab"}

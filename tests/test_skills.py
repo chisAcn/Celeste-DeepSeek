@@ -307,3 +307,64 @@ def test_routes_loaded_from_memory_come_from_verified_replays():
 
     planner = PlannerAgent(lambda context: None, skills=[skill])
     assert planner.book.match(state(x=2072.0, y=-1128.0, room="6b")) is not None
+
+
+# -- a wall is a footing too --------------------------------------------
+
+
+def hanging(x=100.0, y=-1000.0, *, room="7", on_ground=True):
+    return GameState.model_validate({
+        "frame": 1000,
+        "player": {"x": x, "y": y, "vx": 0.0, "vy": 0.0, "on_ground": on_ground,
+                   "dashes": 1, "stamina": 90, "dead": False, "state": "StClimb"},
+        "room": {"name": room, "completed": False},
+    })
+
+
+def test_a_route_can_start_on_a_wall():
+    # A wall is a place to plan the next step from. Leaving match() grounded-
+    # only meant such a route was booked as a hit and then never used.
+    book = SkillBook()
+    book.add(route())
+
+    assert book.match(hanging()) is not None
+    # A slow fall is not a footing: no state name, nothing holding her.
+    falling = hanging(on_ground=False).model_copy(deep=True)
+    falling.player = falling.player.model_copy(update={"state": ""})
+    assert falling.player.stance() == "air"
+    assert book.match(falling) is None
+
+
+def test_a_wall_landing_is_a_route_worth_keeping():
+    book = SkillBook()
+    end = hanging(x=180.0, y=-1000.0, on_ground=False)
+
+    assert book.note(outcome("LANDED", end=end)) == "learned-1"
+    assert book.entries[0].end_stance == "climb"
+
+
+def test_a_step_that_ended_mid_fall_is_not_a_route():
+    book = SkillBook()
+    air = state(x=180.0, on_ground=False)
+    assert air.player.stance() == "air"
+    assert book.note(outcome("LANDED", end=air)) is None
+
+
+def test_a_landing_updates_the_recorded_stance():
+    book = SkillBook()
+    book.add(route())
+    book.note(outcome("LANDED", end=hanging(x=180.0, on_ground=False)))
+    assert book.entries[0].end_stance == "climb"
+    book.note(outcome("LANDED", end=state(x=180.0)))
+    assert book.entries[0].end_stance == "ground"
+
+
+def test_the_landing_stance_survives_the_disk():
+    entry = route()
+    entry.end_stance = "climb"
+
+    assert Replay.from_dict(entry.to_dict()).end_stance == "climb"
+    row = entry.to_dict()
+    row.pop("end_stance")
+    # Rows written before the field existed still load, judged by the bands.
+    assert Replay.from_dict(row).end_stance is None

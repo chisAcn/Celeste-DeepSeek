@@ -11,13 +11,13 @@ not move cannot go stale, which is exactly the promise the planner needs.
 
 Three stances, and only the first one produces an anchor:
 
-``ANCHORED``   grounded and still for ``still_for`` seconds -- safe to plan from
+``ANCHORED``   on her feet or hanging on a wall, still for ``still_for`` seconds
 ``SETTLING``   airborne or sliding -- physics has not finished with her yet
 ``BLOCKED``    dead, or out of control -- the room has to sort itself out first
 
 Standing still is verified by watching, not by assuming: two samples that differ
-by less than ``drift_px`` while grounded. That is what catches a moving platform
-quietly carrying her away from under the plan.
+by less than ``drift_px`` while on a footing. That is what catches a moving
+platform quietly carrying her away from under the plan.
 """
 
 from typing import Literal
@@ -45,8 +45,18 @@ class Standby:
 
     @staticmethod
     def resting(state: GameState) -> bool:
+        """Still, and on something -- the floor or a wall.
+
+        A wall grab is a footing like the floor is: her hands hold her exactly
+        where the last frame left her, and the next plan can start from there.
+        The grip has to survive the job for this to be observable at all, which
+        is what ``hold_after`` does on the bridge side. A bridge too old to name
+        the state machine reports such a landing as airborne, so nothing anchors
+        there and the old behaviour is preserved.
+        """
         player = state.player
-        return bool(player is not None and not player.dead and player.on_ground
+        return bool(player is not None and not player.dead
+                    and player.stance() != "air"
                     and abs(player.vx) < REST_SPEED and abs(player.vy) < REST_SPEED)
 
     def observe(self, state: GameState, now: float) -> Stance:
