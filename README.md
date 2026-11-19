@@ -223,7 +223,7 @@ python -m agent.main --real --mode deepseek --settle --exit-room 6b --success-ro
 
 可选环境变量：`DEEPSEEK_MODEL`（默认 `deepseek-chat`）、`DEEPSEEK_BASE_URL`（默认 `https://api.deepseek.com`）。也支持 `--mode codex`（复用 ChatGPT 登录，不消耗 API key）和 `--mode gpt`。
 
-规划器收到的不只是坐标，还有逐帧物理参考（`agent/knowledge.py`，从 `kb/speedrun/` 蒸馏、与反编译代码核对过）、平台采样、房间几何、可选 TAS 动作提示，以及已验证技能。
+规划器收到的不只是坐标，还有逐帧物理参考（`agent/knowledge.py`，从 `kb/speedrun/` 蒸馏、与反编译代码核对过）、按房间检索的知识库原文（`agent/kb.py`，见「长尾检索」）、平台采样、房间几何、可选 TAS 动作提示，以及已验证技能。
 
 ### 双 Agent 协同（`--collab`）
 
@@ -323,6 +323,28 @@ session {"anchors": 1, "steps": 1, "landed": 1, "planner_replays": 1,
 
 一条规则只在它生效的房间里出现，既省 token，也不会让模型拿某个房间的机制去解释另一个房间。
 
+#### 长尾检索：从 `kb/` 原样引一段
+
+上面两块是手写的摘要，代价是 `kb/speedrun/` 里真正值钱的东西——帧窗口、变体前置、可抄的输入例、规则的例外——从来没进过提示词。房间 8 的口袋就是例子：`mechanisms_reference` 只说了"尖刺致死看运动方向"，而"冲刺 F5–F20 还能 wallbounce、贴带刺墙时容差从 4px 降到 2px"在 `techniques.md §4.3` 里。
+
+`agent/kb.py` 补的就是这一段：
+
+- **按标题切段**（叶子段），共 251 段 / 14.6 万字，索引一次约 5ms，单次检索约 2ms。有子标题的父段不单独成段，避免同一内容进两次。
+- **整段才引**：预算 3600 字符、最多 4 段。放不下的段直接跳过换下一名，**不截断**——截半张表等于给模型一个没有前提的数字。
+- **查询词来自房间和姿态**：实体类型走一张词表（`Spikes → 尖刺/spike/方向性`，没收录的类型返回空，不猜），再加落地/空中的动作族（落地给跳跃·冲刺·walljump，空中给冲刺·wallbounce·攀爬）。
+- **排序**：标题命中 ×3 + 正文命中（上限 4），同分时 `techniques.md` 优先于 `player_physics.md`/`entities.md`（后者大多是在复述已经蒸馏过的规则），再取段更短的。同样的输入永远给同样的输出。
+- **只读 `kb/speedrun/`**：`kb/explore/` 按设计就是探索不该看到的资料；`kb/shared/tools/` 写的是另一套 harness 的调用形状，抄进计划里是跑不起来的代码。本机生成的 `kb/reference/`（社区原文）也不进，量太大且与已核实的文件重复。
+- **引用可回溯**：每段带 `[techniques.md §4.3 Wallbounce variants]`，`【代码已核实】` 与 `（未核实）` 原样保留，`knowledge_guidance` 里写明"引用不是指令，弧线数字仍以 `movement_reference` 为准"。
+
+参数：`--kb-root`（默认 `kb/`）、`--kb-budget`（默认 3600）、`--no-kb`。实际引了几段进 `SESSION.kb_sections`；房间 8 站位 2719,-1704 的一次检索是 §5.4 尖刺与 spike jump、§6.5 换房 tech、§4.3 wallbounce 变体、§7.3 冲刺贴地，共 3597 字符。
+
+想看不调模型、不起游戏时会引什么：
+
+```bash
+python -m agent.kb --types Spikes,Spring,JumpThru     # 只列命中的段
+python -m agent.kb --types Spikes --air --show        # 空中姿态，连正文一起打
+```
+
 ### 单循环路径的防漂移
 
 - **`--settle`** — 规划前等最多 3 秒到「落地且稳定」的观测。
@@ -388,5 +410,6 @@ PICO-8 版 Celeste Classic 用独立的输入格式，单独训练：`python -m 
 - `agent/agents/seed-routes.json` — 房间 7 三段宏的机器可读版本（路线书的起点，见「路线重放」）
 - `agent/agents/retry.py` — 失败后不唤醒模型的换路逻辑（见「本地重算」）
 - `agent/knowledge.py` — 常驻移动常数 + 按房间挑选的机制说明
+- `agent/kb.py` — 从 `kb/speedrun/` 按段检索并原样引用的长尾知识（见「长尾检索」）
 
 源码：https://github.com/chisAcn/Celeste-Deepseek

@@ -27,6 +27,7 @@ from agent.agents.messages import (
 )
 from agent.agents.retry import LocalRetry
 from agent.agents.skills import Replay, SkillBook
+from agent.kb import DEFAULT_BUDGET, GUIDANCE, terms_for
 from agent.knowledge import MOVEMENT_REFERENCE, mechanisms_reference
 from agent.protocol import ActionSequence, GameState
 from agent.tas_training import action_key
@@ -66,7 +67,8 @@ class PlannerAgent:
                  action_prior=None, history: int = 3, timeout: float = 60.0,
                  slack: int = 30, position_slack: float = 2.0,
                  frozen_slack: float = 8.0, book: SkillBook | None = None,
-                 replay: bool = True, expect_tolerance: float = 1.5):
+                 replay: bool = True, expect_tolerance: float = 1.5,
+                 kb=None, kb_budget: int = DEFAULT_BUDGET):
         self.plan_fn = plan_fn
         self.skills = list(skills or [])
         self.exit_room = exit_room
@@ -80,6 +82,11 @@ class PlannerAgent:
         self.replay_enabled = replay
         self.expect_tolerance = expect_tolerance
         self.replays = 0
+        # The long tail behind MOVEMENT_REFERENCE: frame windows and setups,
+        # quoted from kb/ on demand. None means the prompt stays as it was.
+        self.kb = kb
+        self.kb_budget = kb_budget
+        self.kb_sections = 0
         self.book = book if book is not None else SkillBook()
         for skill in self.skills:
             entry = Replay.from_skill(skill)
@@ -139,6 +146,15 @@ class PlannerAgent:
                 "only. They override a guess: a spike kills by direction of "
                 "travel, a spring refills the dash. Where a number here conflicts "
                 "with movement_reference, movement_reference wins.")
+        if self.kb is not None:
+            # Retrieved per anchor rather than per room: the same room asks a
+            # different question once she is airborne with no dash left.
+            excerpt, labels = self.kb.excerpt(
+                terms_for(anchor.entities, state.player), budget=self.kb_budget)
+            if excerpt:
+                self.kb_sections += len(labels)
+                context["room_knowledge"] = excerpt
+                context["knowledge_guidance"] = GUIDANCE
         geometry = anchor.geometry or {}
         if geometry.get("exits"):
             context["room_geometry"] = geometry
