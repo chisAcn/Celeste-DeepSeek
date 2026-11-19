@@ -476,3 +476,63 @@ block's first frame while she is still airborne turns it into a down-diagonal
 dash, and the jump that follows leaves at 183 px/s instead of 325 -- five pixels
 short of clearing the spikes. The fix, if we want our own replay to pass, is a
 duck lead-in that keeps the frame count.
+
+## Duck lead-in, and what it cannot fix (2026-11-19)
+
+`agent.tas_play` now takes `--duck-lead N`: a `Z`/`V` row is split into `N`
+frames of `down` alone followed by the remaining frames of `down+dash`, so the
+dash lands deeper in the row and the section keeps its frame count. Room 8 is
+still 147 frames and 22 rows become 24.
+
+The reference run says the true rule is "dash on the first frame she can
+crouch", not a fixed offset. In `logs/tas-native.json` the first `14,R,Z` block
+opens at f1662, she touches the floor at f1671, and `StDash` appears at f1672 --
+the eleventh frame of a fourteen-frame block. `Z` holds `down` and defers the
+dash; the bridge has no conditional input, so `N` remains a guess (0 restores
+the old behaviour).
+
+Live matrix from the pocket (`reset_room`, one call per lead, no trace):
+
+| lead | status | frames | ends at | dead |
+|---|---|---|---|---|
+| 0 | interrupted | 41 | (2798, -1704) | yes |
+| 3 | interrupted | 33 | (2793, -1704) | yes |
+| 6 | interrupted | 34 | (2790, -1704) | yes |
+| 9 | interrupted | 38 | (2798, -1704) | yes |
+| 12 | interrupted | 38 | (2793, -1704) | yes |
+
+All five die on the same spike bed. The lead changes the timeline but not the
+outcome, because the section's opening does not fit this start: row 1 is one
+step and row 2 an eight-frame jump, which is what entering through the door
+looks like. Standing in the pocket, that jump is airborne, so the `Z` block
+becomes a down-diagonal dash no matter how late the dash press comes.
+
+A pocket-shaped opening does work, and it is the reference move with a different
+run-up (`right x10`, `right+down+dash x2`, `right+down x8`, `right+down+jump
+x2`): ground dash at x2732, hyper at **x2768 with 325/-52.5**, then a clean arc
+over the spike bed to the wall at x2820 -- 2820 reached, nothing touched.
+
+That wall is where our copy stops. The reference does a *second* 325/-105 hyper
+on the frame it touches the wall (f1692: `vx 290 -> 0 -> 321.7`, `vy 60 -> -105`,
+which is 325 decayed by one frame of air drag). Pressing jump on contact gives us
+a wall jump instead (`vx -130`); scanning the press 10..16 frames after the hyper
+with and without `down` held produced no 325 in any of the fourteen runs. An
+`up+dash` at that wall does climb it (y -1697 -> -1733), so the remaining problem
+is the exit from the wall, not the approach.
+
+## Taking over a `--tas` session (bridge 0.3.10)
+
+Reaching room 8 for these tests needs `--tas`, and a finished `.tas` file leaves
+CelesteTAS holding the level: `Level.Update` is never called (the bridge's frame
+counter freezes), `resume_game` reports `paused: false` without unfreezing it,
+and every input call is refused. `TAS.Module.CelesteTasExports.IsTasActive`
+compiles to `return Manager.Running`, so `set_tas_enabled` invokes
+`TAS.Manager.DisableRun()` by reflection:
+
+```
+stop {"applied": true, "detail": "TAS.Manager.DisableRun", "tas_active": false}
+frame 1756 ... frame 1775 ...   # advancing again
+```
+
+Setting `CelesteTasSettings.Instance.Enabled = false` (the earlier attempt) does
+nothing to `IsTasActive`; the run has to be stopped, not the settings flipped.

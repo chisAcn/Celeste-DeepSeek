@@ -23,6 +23,10 @@ public sealed class Module : EverestModule {
     readonly string saveSlot = $"CelesteAgentBridge-{Guid.NewGuid():N}";
     bool agentPaused;
     bool TasActive => TasInterop.IsTasActive?.Invoke() == true;
+    // Enabled but idle is not the same as playing: a game launched with --tas
+    // keeps TAS mode on after the file ends, and taking over from there is how
+    // a run gets inspected. Only an actually running playback owns the input.
+    bool TasPlaying => TasActive && TasInterop.IsTasRunning?.Invoke() == true;
     public override void Initialize() {
         typeof(TasInterop).ModInterop();
         typeof(SpeedrunInterop).ModInterop();
@@ -118,9 +122,13 @@ public sealed class Module : EverestModule {
                 ["entities"]=true, ["collision"]=true, ["tiles"]=true,
                 ["capture"]=true, ["menu"]=true, ["save"]=true, ["trajectory"]=true,
                 ["expect"]=true, ["positions"]=true, ["player_state"]=true,
-                ["hold_after"]=true,
+                ["hold_after"]=true, ["tas_release"]=true,
                 ["mod_version"]=Metadata.Version.ToString()
             };
+            case "set_tas_enabled":
+                if (active != null) throw new ArgumentException("input execution active");
+                var (applied, detail) = TasRelease.SetRunning(p["enabled"]?.GetValue<bool>() ?? false);
+                return new JsonObject { ["applied"]=applied, ["detail"]=detail, ["tas_active"]=TasActive };
             case "get_state": return snapshot.DeepClone();
             case "get_platforms":
                 if (Engine.Scene is not Level platformLevel) throw new ArgumentException("no active room");
@@ -132,7 +140,7 @@ public sealed class Module : EverestModule {
             case "load_state":
             case "clear_state":
                 if (!SpeedrunInterop.Available) throw new ArgumentException("Speedrun Tool API unavailable");
-                if (active != null || TasActive) throw new ArgumentException("input execution active");
+                if (active != null || TasPlaying) throw new ArgumentException("input execution active");
                 string operation = req["method"]!.GetValue<string>();
                 if (operation == "clear_state") {
                     SpeedrunInterop.ClearState!(saveSlot);
@@ -156,7 +164,7 @@ public sealed class Module : EverestModule {
                 return new JsonObject { ["accepted"]=TasInterop.LoadSavestate(handle), ["frame"]=target };
             case "pause_game":
             case "resume_game":
-                if (TasActive) throw new ArgumentException("CelesteTAS owns playback");
+                if (TasPlaying) throw new ArgumentException("CelesteTAS is playing back");
                 if (active != null) throw new ArgumentException("input execution active");
                 if (Engine.Scene is not Level pauseLevel) throw new ArgumentException("no active room");
                 if (req["method"]!.GetValue<string>() == "pause_game") {
@@ -213,14 +221,14 @@ public sealed class Module : EverestModule {
             case "stop": if(active != null) Finish("interrupted"); input.Release(); return new JsonObject { ["stopped"]=true };
             case "get_execution": return executions[p["execution_id"]!.GetValue<string>()].DeepClone();
             case "reset_room":
-                if (TasActive) throw new ArgumentException("CelesteTAS owns playback");
+                if (TasPlaying) throw new ArgumentException("CelesteTAS is playing back");
                 if(active != null) Finish("interrupted");
                 if (Engine.Scene is not Level current) throw new ArgumentException("no active room");
                 current.Reload();
                 return new JsonObject { ["requested"]=true };
             case "execute_frames":
             case "restore_and_execute":
-                if (TasActive) throw new ArgumentException("CelesteTAS owns playback");
+                if (TasPlaying) throw new ArgumentException("CelesteTAS is playing back");
                 if(active != null) throw new ArgumentException("busy");
                 bool restore = req["method"]!.GetValue<string>() == "restore_and_execute";
                 var level = Engine.Scene as Level;
@@ -295,7 +303,7 @@ public sealed class Module : EverestModule {
         var job=active;
         if(job != null) {
             var player=level.Tracker.GetEntity<Player>();
-            if(TasActive || player == null || player.Dead || !player.InControl || level.InCutscene || level.FrozenOrPaused || level.Transitioning || level.Session.Level != job.Room) { Finish("interrupted"); job=null; }
+            if(TasPlaying || player == null || player.Dead || !player.InControl || level.InCutscene || level.FrozenOrPaused || level.Transitioning || level.Session.Level != job.Room) { Finish("interrupted"); job=null; }
         }
         if(job != null) {
             var action=job.Actions[job.Index]!;

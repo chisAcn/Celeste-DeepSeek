@@ -1,5 +1,5 @@
 - Name: CelesteAgentBridge
-  Version: 0.3.6
+  Version: 0.3.10
   DLL: CelesteAgentBridge.dll
   Dependencies:
     - Name: Everest

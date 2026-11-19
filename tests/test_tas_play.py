@@ -9,6 +9,7 @@ from agent.mock import MockBridge
 from agent.tas_play import (
     MAX_FRAMES_PER_CALL,
     load_section,
+    split_crouch,
     to_actions,
 )
 
@@ -27,6 +28,23 @@ def test_crouch_dash_expands_to_down_and_dash():
     # "4,Z" is a crouch dash: the bridge has no Z button, so it becomes down+dash.
     rows, _ = load_section(TAS, "6b")
     assert (["down", "dash"], 4) in rows
+
+
+def test_crouch_dash_can_wait_out_a_duck_lead():
+    # With a lead the dash press waits, but the row still spans the same frames.
+    plain, _ = load_section(TAS, "6b")
+    led, _ = load_section(TAS, "6b", duck_lead=3)
+    assert (["down"], 3) in led
+    assert (["down", "dash"], 1) in led
+    assert sum(frames for _, frames in led) == sum(frames for _, frames in plain)
+
+
+def test_duck_lead_keeps_the_other_buttons_and_leaves_one_dash_frame():
+    rows = [(["right", "down", "dash"], 2)]
+    assert split_crouch(rows[0][0], 2, 5) == [(["right", "down"], 1),
+                                              (["right", "down", "dash"], 1)]
+    assert split_crouch(rows[0][0], 1, 5) == [(["right", "down", "dash"], 1)]
+    assert split_crouch(rows[0][0], 14, 0) == [(["right", "down", "dash"], 14)]
 
 
 def test_section_is_one_gapless_call():

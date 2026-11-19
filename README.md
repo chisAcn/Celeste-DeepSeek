@@ -140,7 +140,7 @@ python -m agent.sweep --save \
 | --- | --- |
 | `agent.trace_run` | 带前置条件（`--pre`、`--wait-mover`）的逐帧轨迹探测 |
 | `agent.replay` | 重放并比较多次执行的位置/速度偏差（确定性审计） |
-| `agent.tas_play` | 按 `#lvl_<room>` 分节回放 `.tas` 文件 |
+| `agent.tas_play` | 按 `#lvl_<room>` 分节回放 `.tas` 文件（`--duck-lead` 控制蹲冲的起手帧） |
 | `agent.restore_probe` | 存档/恢复的探针封装 |
 
 ---
@@ -439,6 +439,30 @@ python -m agent.main --real --mode deepseek --tas-prior data/tas-training/action
 > **注意**：`data/` 里那份 `1A-through-6b.tas` 的 `#lvl_6b` 段是**原版 1A** 的（与 `data/tas-source/1A.tas` 对应段逐字节相同），而本机跑的是教学地图——房间名撞了，几何完全不同。回放它会把人从左门带出房间。TAS 数据对当前关卡无效，只能自己解。
 
 PICO-8 版 Celeste Classic 用独立的输入格式，单独训练：`python -m agent.classic_training <路径>`。
+
+### 重放分节：`Z` 是蹲冲，得先蹲下
+
+`Z`/`V` 不是「同一帧按 down+dash」。原生轨迹里房间 8 的 `14,R,Z` 从 f1662 开始，她 f1671 才落地，**f1672 才起冲**——CelesteTAS 一直按住 down，等到能蹲下的那一帧才按 dash。第一帧就按 dash 而人在空中，变成斜下冲，后续起跳只剩 183 px/s，差 5px 过不了刺带。
+
+桥接没有条件输入的通道，所以 `agent.tas_play` 用固定延迟近似：
+
+```shell
+python -m agent.tas_play --file data/tas-source/1A.tas --room 8 --duck-lead 3 --dry-run
+```
+
+`--duck-lead N` 把 dash 推迟到该行的第 `N+1` 帧，**总帧数不变**（房间 8 仍是 147 帧，两处 `Z` 各拆成「down 3 帧 + down+dash 若干帧」，22 行变 24 行）。默认 0 保持旧行为。它是近似：真值是「落地那一帧」，而 `N` 是猜的。
+
+从**房间 8 口袋站定**起跑时这套行不通——分节的第一行是「走一步再满跳」，那是从门里飞进来的状态写的；站定起跳后人已在空中，`Z` 块无论延迟几帧都是斜下冲。实测 lead 0/3/6/9/12 五次全死在 x≈2790–2798 的刺上（第 33–41 帧）。口袋自己的开口是「走 10 帧 → 贴地冲刺 → 吃满 8 帧 → 起跳」，能在 x2768 拿到 hyper `325/-52.5`，活着飞到 x2820 的竖墙。
+
+### 从 `--tas` 会话接管
+
+`--tas` 播完后 CelesteTAS 仍持有 `TAS.Manager.Running`，关卡被冻住：`Level.Update` 不被调用、帧计数不动、`resume_game` 也解不开（`IsTasActive` 在 IL 里就是 `return Manager.Running`）。桥接 0.3.10 加了 `set_tas_enabled`，反射调用 `TAS.Manager.DisableRun()`：
+
+```python
+await client.call("set_tas_enabled", enabled=False)   # -> {"applied": true, "detail": "TAS.Manager.DisableRun"}
+```
+
+之后帧恢复推进、`reset_room` 与 `execute_frames` 都能用。这既是今天拿 `--tas` 把游戏送回房间 8 再接手测试的路子，也是「从一段 TAS 录像的半途继续」的入口。
 
 ---
 
