@@ -536,3 +536,67 @@ frame 1756 ... frame 1775 ...   # advancing again
 
 Setting `CelesteTasSettings.Instance.Enabled = false` (the earlier attempt) does
 nothing to `IsTasActive`; the run has to be stopped, not the settings flipped.
+
+## The second hyper is a wall jump with `grab` held (2026-11-19)
+
+The "325/-105" the reference does on the frame it reaches the wall at x2820 is
+not a dash and not a plain jump. Pressing `jump` on contact gives a wall jump
+(`vx -130`, she is thrown back onto the spike bed). Pressing **`right+jump+grab`**
+on that exact frame reproduces the reference:
+
+```
+f2991  (2820,-1704) v(   0.0,-105.0) StNormal  d1   <- corner clip, speed zeroed
+f2992  (2825,-1706) v( 313.0, -90.0) StNormal  d1   <- reference f1693: 321.7/-105
+f2993  (2830,-1707) v( 308.7, -75.0)
+```
+
+`dashes` stays at 1: the move costs no dash, which is what lets the reference
+keep one for the `up+dash` two seconds later. She clips the top-left corner of
+the solid at `2824,-1704 16x16` (top covered by spikes) for a single frame, and
+the grab-held jump keeps her horizontal speed instead of replacing it. The 12px
+difference from 325 is the slower approach into the corner (281.7 vs 290.3).
+
+From there the climb chain of the reference reproduces frame for frame with the
+bridge's seven buttons:
+
+| step | ours | reference |
+|---|---|---|
+| corner jump | (2820,-1704) -> 313/-90 | f1692 0/-105, f1693 321.7/-105 |
+| hold `right+jump+grab` x17 | rise to (2895,-1728) | f1708 (2897,-1730) |
+| `right+up+dash` | (2895,-1728) -> (2900,-1768), vy -240 | f1709-f1718, y -1730 -> -1766 |
+| `up+jump` on the last dash frame | **(2903,-1765) v(170,-160)** (wallbounce) | f1719 (2903,-1769) v(170,-160) |
+
+## What still separates us from the exit
+
+The wallbounce lands the reference on the jump-through at `2904..2912, y-1792`
+(f1731 x2914, 2px of hitbox overlap). We land at x2920..2923 and fall past it
+into the spikes. The surface at -1792 is solid from 2880 to 2904 and one-way
+from 2904 to 2912, so the landing needs a hitbox centre in `(2900, 2916)`.
+
+Every lever we have is measured against that:
+
+- **air braking does not exist above run speed.** `left` held for 2, 6 and 20
+  frames after the bounce leaves the decay at exactly -10.8/frame, identical to
+  no input. `right` is the only direction that changes anything (it holds 165.7
+  instead of 159.2).
+- **the bounce x is pinned by the wall.** The block face is at 2896, so the
+  earliest possible bounce is x2900 (`up` for 7 frames instead of 9); that lands
+  at 2920. Bouncing on the last dash frame lands at 2923.
+- **the jump cannot be downgraded.** Pressing it 1..5 frames later, or with
+  `left`/`down`/`grab`/`right` held, always yields 170/-160. A plain 130 wall
+  jump would drift ~13px and land on the pad, but she is inside the wallbounce
+  window for all of it.
+
+The reference shaves ~9px with a horizontal drop we cannot reproduce: f1722 and
+f1723 lose **50.8 px/s each** (`148.3 -> 97.5 -> 46.7`) while `vy` is clamped to
+-105, and those are the two frames where its input is `L,K,G`. None of the seven
+buttons the bridge exposes produces that drop, and it is not a collision -- the
+tiles at (2910,-1776) are empty and the pads nearby are one-way. The row after it
+is `L,J,G`, so `K` is a key CelesteTAS knows and the bridge does not.
+
+What is left is 5px on one landing, so the next things worth measuring are the
+pad itself and the exits above it. The crumble at `2904..2928, y-1736` is the
+only refill inside this climb; it sits 56px below the pad and an `up+dash` lifts
+44, so it cannot substitute for landing there. The chimney at the top (`9z`,
+x2904) is 8px wide, so climbing through it needs the hitbox centred at exactly
+2908 -- tighter than anything this chain has attempted.
